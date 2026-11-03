@@ -25,8 +25,9 @@ export function demoBackend(): Backend {
     bundle: executable.includes('.app/') ? executable.slice(0, executable.indexOf('.app/') + 4) : null,
   });
   const seeds = new Map(SEEDS.map(seed => [`demo-${seed[4]}`, seed]));
-  let processes = SEEDS.map(toProcess);
   const params = new URLSearchParams(location.search);
+  // `shot` (README screenshots) leaves out PortKiller's own dev server.
+  let processes = SEEDS.filter(seed => !params.has('shot') || seed[5][0] !== 1420).map(toProcess);
   if (params.has('dense')) {
     processes.push(...Array.from({length: 16}, (_, index): PortProcess => ({
       pid: 10000 + index, identity: `dense-${index}`, name: 'node', app: 'node',
@@ -37,7 +38,8 @@ export function demoBackend(): Backend {
   }
   if (params.has('empty')) processes = [];
   let scans = 0;
-  let settings: Settings = { showCount: true, launchAtLogin: false, idleMinutes: 30, pinned: ['/opt/homebrew/bin/postgres|local', '/opt/homebrew/bin/redis-server|local'], appearance: 'auto' };
+  let settings: Settings = { showCount: true, launchAtLogin: false, idleMinutes: 30, pinned: ['/opt/homebrew/bin/postgres|local', '/opt/homebrew/bin/redis-server|local'],
+    appearance: (['light', 'dark'] as const).find(theme => theme === params.get('theme')) ?? 'auto' };
   return {
     // Like the native scanner, CPU is unknown until a second sample exists.
     scan: async () => {

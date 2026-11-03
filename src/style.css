@@ -154,6 +154,14 @@ h1 { flex: 1; min-width: 0; margin: 0; font-size: 15.5px; font-weight: 650; lett
 /* Development-only ?demo preview in a browser, where there is no native glass. */
 .browser-preview { min-height: 100vh; padding: 40px 16px; background: light-dark(#dfe4f2, #14152a); }
 .browser-preview .panel { width: 360px; max-width: 100%; margin: 0 auto; --max-menu-height: min(680px, calc(100vh - 80px)); background: light-dark(rgb(247 247 250 / 86%), rgb(30 30 35 / 82%)); backdrop-filter: blur(30px) saturate(170%); box-shadow: 0 0 0 .5px light-dark(rgb(0 0 0 / 12%), rgb(0 0 0 / 55%)), 0 24px 60px -16px rgb(0 0 0 / 45%); }
+/* ?demo&shot: a desktop backdrop for the README screenshots. */
+.browser-preview.shot { min-height: 0; padding: 24px; background: none; }
+.browser-preview.shot .panel { --max-menu-height: none; }
+:root:has(.shot) { min-height: 100vh; }
+:root:has(.shot) { background: linear-gradient(160deg, #b9cbff, #f3cddc 55%, #cfc4ff); }
+:root[data-theme="dark"]:has(.shot) { background: linear-gradient(160deg, #24306e, #5a2550 55%, #2e2470); }
+:root[data-platform="windows"]:has(.shot) { background: linear-gradient(160deg, #bcd3ff, #c9e6f4); }
+:root[data-platform="windows"][data-theme="dark"]:has(.shot) { background: linear-gradient(160deg, #24345f, #1b4152); }
 @media (prefers-reduced-transparency: reduce) { .browser-preview .panel { background: light-dark(#f7f7fa, #1e1e23); backdrop-filter: none; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; } }
 .icon.own { background: #3b4bd8; }

@@ -1,98 +1,109 @@
+<div align="center">
+
+<img src="docs/screenshots/icon.png" width="96" height="96" alt="PortKiller icon">
+
 # PortKiller
 
-A small menu bar and tray app for macOS and Windows, built with Tauri 2, Rust, TypeScript and the system web view (WebKit on macOS, WebView2 on Windows). It shows which apps are listening on which ports and stops them safely.
+See which apps are holding your ports, and stop them safely.<br>
+A small, open-source menu bar and tray app for macOS and Windows.
+
+[![CI](https://github.com/edisonaugusthy/PortKiller/actions/workflows/ci.yml/badge.svg)](https://github.com/edisonaugusthy/PortKiller/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/edisonaugusthy/PortKiller?label=release)](https://github.com/edisonaugusthy/PortKiller/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+</div>
+
+| macOS | Windows |
+| :---: | :---: |
+| <img src="docs/screenshots/macos-light.png" width="340" alt="PortKiller on macOS, light"> | <img src="docs/screenshots/windows-light.png" width="340" alt="PortKiller on Windows, light"> |
+| <img src="docs/screenshots/macos-dark.png" width="340" alt="PortKiller on macOS, dark"> | <img src="docs/screenshots/windows-dark.png" width="340" alt="PortKiller on Windows, dark"> |
+
+<sub>Screenshots of the real interface with sample processes (`npm run dev`, then open `/?demo`).</sub>
 
 ## Download
 
-- Windows: [PortKiller-Windows-Setup.exe](https://github.com/edisonaugusthy/PortKiller/releases/latest/download/PortKiller-Windows-Setup.exe)
-- macOS: coming once the app can be signed and notarized; build it yourself meanwhile (see Development).
+| Platform | Download |
+| --- | --- |
+| Windows 10 and 11 | [PortKiller-Windows-Setup.exe](https://github.com/edisonaugusthy/PortKiller/releases/latest/download/PortKiller-Windows-Setup.exe) |
+| macOS 14.5 and later | Coming once the app is signed and notarized. Until then, [build it from source](#build-from-source). |
 
-These links always point at the newest release, so a website can use them directly.
+Both links always point at the newest release. PortKiller updates itself: when a new version is out, the list shows **Update**.
 
-## Use
+## What it does
 
-Open `src-tauri/target/release/bundle/macos/PortKiller.app` after building. Click its socket icon in the menu bar. Right-click the icon to quit.
+- **Every listening app at a glance.** One row per app: its icon, its name (the project folder when there is one, so two Node servers read as `storefront` and `api`) and its port. `+2` means it listens on more ports.
+- **Running and Idle.** Apps with no noticeable CPU for 30 minutes (configurable) move to Idle, largest first, with **Stop all** to free them in one go. Pin the ones you never want stopped.
+- **One click for details.** Every port with Open and Copy, plus the app, CPU, memory, uptime and folder.
+- **Stop with confidence.** Confirmations name every port that will be freed. On macOS, Stop asks the app to quit and Option-click forces it; on Windows, End task ends it.
+- **Search anything.** Start typing or press ⌘F / Ctrl+F to filter by port, app, project or PID.
+- **Looks native.** Liquid Glass on macOS 26, Acrylic on Windows 11, light and dark, and solid colors when transparency is reduced.
+- **Light on resources.** No dock icon and no background timers. The window is created when you open it and destroyed when you close it. About 17 KB of JavaScript.
 
-- Each row is an app's icon, its name and its port. The name is the project folder when there is one, so two Node servers read as `storefront` and `old-landing`. Apps from a `.app` bundle show their real icon; command-line servers show a small glyph for their runtime (Node, Python, Ruby, PostgreSQL and others). A `+1` after the port means the app listens on more ports.
-- Apps are grouped into **Running** (pinned apps first, then by port) and **Idle** (no noticeable CPU for the configured time, 30 minutes by default; largest memory first). **Stop all** stops the idle apps shown, one at a time, with the usual validation for each. Pinned apps are never idle.
-- Clicking an app opens its page: each port with Open (in the default browser) and Copy, then App, CPU, Memory, Uptime (or Idle) and Folder. CPU uses Activity Monitor's convention, where 100% is one fully used core.
-- Hides macOS system executables and processes owned by other users. Filtering is based on ownership and executable path, so your development server on a low-numbered port is still eligible.
-- The menu stays within 70% of the current screen's usable height, up to 680 logical pixels. Search stays in place while the list scrolls.
-- Stop requests a graceful shutdown (`SIGTERM`). Hold Option while clicking Stop to force quit (`SIGKILL`). Both confirm inline and name every affected port, because stopping a process releases all of its ports.
-- During `npm run tauri dev`, the dev server that serves PortKiller's own window is shown last as **PortKiller**, is never idle or included in Stop all, and asks "Stop :1420 and close PortKiller?" before stopping.
-- Search by port, application, project, or PID. Start typing or press Command-F to search; Escape cancels a confirmation, leaves a page, clears the search, then closes the menu.
-- Settings: Open at login (off by default, never enabled automatically), Count in menu bar, Idle after, Appearance (Auto, Light or Dark) and the pinned apps.
+## Safety
 
-This version shows TCP servers, not outgoing client connections or UDP sockets. Containers and virtual machines can expose a host proxy process; PortKiller manages that host process, not services inside the guest. Supervisors may restart processes after they are stopped.
+All process inspection and stopping happens in Rust; the interface cannot run commands or touch files. Before every stop PortKiller checks again that the process:
 
-### On Windows
+- belongs to you (UID on macOS, Windows user SID),
+- is the same process (its start time hasn't changed, so a recycled PID is never hit),
+- still listens on exactly the ports you confirmed,
+- is not a system process or PortKiller itself.
 
-The same app runs from the system tray, built with `npm run tauri build` on Windows (`src-tauri/target/release/bundle/nsis/`). It follows Windows 11's look: the flyout opens above the tray on Acrylic, with Segoe UI and Windows controls. The differences:
+If anything changed, the stop is refused and you review it again. No `sudo`, admin rights or helper tools are used.
 
-- **End task** ends the process at once (`taskkill /F`). Windows cannot reliably ask a console server such as Node or Python to shut down cleanly, so there is no separate Force quit. Confirmations still name every affected port.
-- Tray icons cannot show text, so the open-port count is in the icon's tooltip and the Count setting is hidden. Open at login is called Start with Windows.
-- Rows show runtime glyphs; reading `.exe` icons is not implemented yet.
-- Ownership is checked by the process's Windows user (SID) instead of a Unix UID, and anything under the Windows folder is hidden and protected.
+## Privacy
 
-The Windows code compiles and passes Clippy from macOS, and CI builds and tests it on Windows; see `docs/verification.md`.
+PortKiller has no analytics or telemetry. Its only network request is the update check, which asks GitHub Releases for a newer version at most every six hours while the menu is open. Updates are verified against a signing key built into the app before they are installed.
 
-## Updates
+## Build from source
 
-While the menu is open, PortKiller asks GitHub Releases for a newer version, at most every six hours. When there is one, the list shows "Version x.y.z is available" with **Update**, which downloads it, checks its signature against the public key built into the app, installs it and restarts. Only the release check is sent to GitHub; nothing about you or your processes.
-
-## Resource use
-
-The tray runs without a dock icon or a resident webview. The popover is created on demand and destroyed on dismissal. There are no background scan timers. The count in the menu bar is the last observed count and refreshes when opened.
-
-macOS draws the menu's glass: Liquid Glass on macOS 26 and later, the popover material on earlier versions, and a solid background when Reduce Transparency is on. The page itself paints no blur or backdrop.
-
-While open, one scan runs every three seconds (the second after one second, since CPU needs two samples); scans never overlap. Queries target only listening PIDs. CPU time and resident memory come from one `proc_pidinfo` call per listening process; no process tree is scanned. CPU time is converted from Mach ticks, which are not nanoseconds on Apple Silicon. The page is only rewritten when what it shows changes, so most scans touch no DOM. Command/directory metadata is cached while open and discarded on close; the app page requests it on demand. App icons are drawn once per bundle at 52 px, kept while the menu is open and discarded on close. Nothing is downloaded.
-
-Idle time is measured only by scans, so it spans openings without a background timer: a process counts as active when it used more than 1% of a core between two scans. On first sight, a process that is at least 30 minutes old and has averaged under 0.1% CPU is treated as idle since it started. Only per-process CPU totals and timestamps are kept while closed.
-
-The release frontend has about 17 KB of JavaScript and 9 KB of CSS before compression. The native glass adds about 2.6 MB to the main process once the menu has opened. Native memory measurements vary with macOS, shared framework accounting, and the number of running servers; see `docs/verification.md` for this machine's observations.
-
-## Development
-
-Requires Node.js 22.12+ (or a compatible current release) and Rust 1.90+, plus macOS 14.5+ with Xcode Command Line Tools, or Windows 10/11 with the Visual Studio C++ Build Tools and the WebView2 runtime (preinstalled on Windows 11).
+You need Node.js 22.12+, Rust 1.90+, and either macOS 14.5+ with the Xcode Command Line Tools, or Windows 10/11 with the Visual Studio C++ Build Tools and WebView2 (preinstalled on Windows 11).
 
 ```sh
+git clone https://github.com/edisonaugusthy/PortKiller.git
+cd PortKiller
 npm install
-npm run tauri dev
+npm run tauri dev      # run the app from source
+npm run tauri build    # build PortKiller.app or the Windows installer
 ```
 
-The app opens in the menu bar. For a browser-only UI preview with explicitly simulated processes:
+To work on the interface in a browser with sample processes, run `npm run dev` and open `http://127.0.0.1:1420/?demo`. Add `&windows` for the Windows look, `&theme=dark`, `&dense` for a long list, `&empty`, or `&update` to show the update notice. The demo is removed from release builds.
 
-```sh
-npm run dev
-# Open http://127.0.0.1:1420/?demo
-# Add &dense for a 27-app layout check, &empty for the empty state, or &windows for the Windows look.
-```
-
-The demo adapter is removed from production builds. Native releases always query real processes.
+Checks (CI runs the same on macOS and Windows):
 
 ```sh
 npm run build
-cargo test --manifest-path src-tauri/Cargo.toml
-cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
-npm run tauri build
+cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 ```
 
-The Tauri npm wrapper also finds an existing stable Rust toolchain when its command shims are missing from PATH. CI (`.github/workflows/ci.yml`) runs the same checks and builds on macOS and Windows.
+## How it is built
 
-Everything that differs between operating systems lives in `src-tauri/src/platform/` (`macos.rs`, `windows.rs`), behind the same eight functions: `listeners`, `identity`, `resources`, `read_details`, `signal`, `icon_source`, `icon_png` and `open_url`. The rest of the Rust code and the whole frontend are shared.
+```
+src/                     Interface: one TypeScript file, one stylesheet, no framework
+src-tauri/src/
+  scanner.rs             Shared: grouping, CPU and idle tracking, stop validation
+  ports.rs               Tray, window, settings, updates and the commands the interface calls
+  platform/macos.rs      lsof, libproc, signals, app icons from macOS
+  platform/windows.rs    TCP table, process info, End task
+.github/workflows/       CI on macOS and Windows; the manual Release workflow
+```
+
+Everything that differs between macOS and Windows sits in `src-tauri/src/platform/` behind the same eight functions, so the rest of the app is shared. Measurements and test notes are in [`docs/verification.md`](docs/verification.md).
 
 ## Releasing
 
-1. Set the new version in `package.json`, `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, then commit and push.
-2. Run **Actions › Release › Run workflow** on GitHub. It builds the Windows installer, signs the update package, and publishes `PortKiller <version>` with `latest.json`, which installed apps read to offer the update.
+1. Set the version in `package.json`, `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, then commit and push.
+2. Run **Actions › Release › Run workflow**. It builds the Windows installer, signs the update and publishes the release with `latest.json`, which installed apps use to offer the update.
 
-Update packages are signed with the private key from `npm run tauri signer generate` (kept outside the repository, in `~/.tauri/portkiller-updater.key`) and stored as the `TAURI_SIGNING_PRIVATE_KEY` repository secret. The matching public key is in `tauri.conf.json`. If the private key is lost, installed apps cannot accept further updates and must be reinstalled from the website. The macOS job is in the workflow but commented out until an Apple Developer ID is available.
+The workflow needs the `TAURI_SIGNING_PRIVATE_KEY` secret (from `npm run tauri signer generate`). The macOS job is ready in the workflow but commented out until an Apple Developer ID is available.
 
-## Process controls
+## Limits
 
-All inspection and signalling runs in Rust. The frontend has no shell, filesystem, or network plugin; Open builds the `http://localhost:<port>` URL in Rust from a port number. Before a stop, Rust validates the process owner (UID and real UID on macOS, the user SID on Windows), executable path, PID start time, and the complete current set of TCP listening ports. Changed identities or port sets are rejected for review. System processes, PID 0/1 (0–4 on Windows), negative PIDs, and PortKiller itself cannot be stopped. No `sudo` or privilege helper is used.
+PortKiller shows TCP servers, not outgoing connections or UDP. For containers and virtual machines it manages the host-side proxy process, not services inside the guest. Process managers may restart what you stop.
 
-App icons are read by macOS from the app bundle that contains each process; `app_icon` accepts only absolute paths to existing `.app` directories. Commands and working directories remain local and are not written to logs or settings. Pins are stored as executable path and project name. Preferences are stored in the app's configuration directory. The app has no analytics, telemetry, or remote assets; its only network request is the update check described above.
+## Contributing
 
-The bundled app is for local use; public distribution would require your Apple signing identity and notarization on macOS, and a code-signing certificate on Windows so SmartScreen does not warn.
+Bug reports, ideas and pull requests are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md); for security issues, follow [SECURITY.md](SECURITY.md) instead of opening a public issue.
+
+## License
+
+[MIT](LICENSE) © Edison Augusthy

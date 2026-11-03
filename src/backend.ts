@@ -4,6 +4,7 @@ import type { Backend, ProcessDetails, Settings, Snapshot, StopOutcome } from '.
 export async function createBackend(): Promise<Backend> {
   if (import.meta.env.DEV && new URLSearchParams(location.search).has('demo')) {
     document.body.classList.add('browser-preview');
+    if (new URLSearchParams(location.search).has('shot')) document.body.classList.add('shot');
     return (await import('./demo')).demoBackend();
   }
   if (!isTauri()) {

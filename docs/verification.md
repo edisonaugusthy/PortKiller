@@ -1,3 +1,8 @@
+# Verification — 3 November 2026 (first CI run)
+
+- GitHub Actions CI passed on `macos-latest` (8 min) and `windows-latest` (11 min): frontend build, `cargo fmt --check`, Clippy with warnings as errors, `cargo test` and `tauri build`. On Windows this included the native test that starts a real Python listener, finds it, refuses a stale identity and a wrong port set, stops it and leaves its neighbour running.
+- README screenshots (`docs/screenshots/`) were captured from a development build of the real interface with sample processes (`?demo&shot`), in headless Chrome at 2x. The Windows ones are rendered on macOS, so they use the fallback sans-serif font rather than Segoe UI.
+
 # Verification — 3 November 2026 (releases and updates)
 
 - Updater: Tauri's updater plugin with the system TLS (Security framework, Schannel), so no extra crypto library is compiled in. `cargo clippy -D warnings` passed for macOS and for Windows (cross-checked from macOS); `cargo test` 8 passed.

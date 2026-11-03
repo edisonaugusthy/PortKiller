@@ -1,6 +1,13 @@
 {
   "name": "portkiller",
   "version": "0.1.0",
+  "description": "See which apps hold your ports, and stop them safely. A menu bar and tray app for macOS and Windows.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/edisonaugusthy/PortKiller.git"
+  },
+  "homepage": "https://github.com/edisonaugusthy/PortKiller",
   "private": true,
   "type": "module",
   "scripts": {

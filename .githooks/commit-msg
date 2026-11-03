@@ -1,0 +1,9 @@
+#!/bin/sh
+# Removes AI attribution from commit messages: Claude co-author trailers and "Generated with Claude Code" lines.
+# Enable once per clone: git config core.hooksPath .githooks
+message="$1"
+filtered="$(mktemp)"
+grep -v -i -E '^co-authored-by:.*(claude|anthropic)|generated with \[?claude code' "$message" > "$filtered"
+# Drop trailing blank lines left behind by the removed trailer.
+awk 'NF { for (; blank > 0; blank--) print ""; print; next } { blank++ }' "$filtered" > "$message"
+rm -f "$filtered"
