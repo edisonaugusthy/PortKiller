@@ -42,6 +42,8 @@ let settings: Settings = { showCount: true, launchAtLogin: false, idleMinutes: 3
 let error = '';
 let notice = '';
 let copiedPort: number | null = null;
+let available: string | null = null;
+let updating = false;
 let loading = true;
 let scanning = false;
 let stopping = false;
@@ -158,6 +160,7 @@ function bars(): string {
   if (error) return `<div class="bar error" role="alert">${esc(error)}</div>`;
   if (pendingIdle) return `<div class="bar" role="alertdialog" aria-label="Confirm stop all idle">${confirmBox(`${WORDS.stop} ${pendingIdle.length} idle app${pendingIdle.length === 1 ? '' : 's'}?`, false, 'confirm-idle', WINDOWS ? WORDS.stopAll : WORDS.stopButton)}</div>`;
   if (notice) return `<div class="bar notice" role="status">${icon('check', 'ok')}<span>${esc(notice)}</span></div>`;
+  if (available) return `<div class="bar notice" role="status"><span>Version ${esc(available)} is available</span><button class="accent" data-action="update" ${updating ? 'disabled' : ''}>${updating ? 'Updating…' : 'Update'}</button></div>`;
   return '';
 }
 
@@ -291,6 +294,7 @@ app.addEventListener('click', event => {
     case 'appearance': void saveSettings({...settings, appearance: target.dataset.value as Settings['appearance']}); break;
     case 'open-port': void backend.openPort(port).catch(reason => { error = String(reason); render(); }); break;
     case 'copy': void copy(port); break;
+    case 'update': void installUpdate(); break;
   }
 });
 
@@ -304,6 +308,20 @@ async function copy(port: number): Promise<void> {
   }
   copiedPort = port; render();
   setTimeout(() => { if (copiedPort === port) { copiedPort = null; scheduleRender(); } }, 1500);
+}
+
+async function checkUpdate(): Promise<void> {
+  try { available = await backend.updateVersion(); scheduleRender(); }
+  catch { /* Offline: try again next time the menu opens. */ }
+}
+
+/** PortKiller restarts into the new version, so this only returns if something failed. */
+async function installUpdate(): Promise<void> {
+  if (updating) return;
+  updating = true; error = ''; render();
+  try { await backend.installUpdate(); }
+  catch (reason) { error = String(reason); }
+  finally { updating = false; render(); }
 }
 
 async function loadIcon(bundle: string): Promise<void> {
@@ -424,6 +442,7 @@ void (async () => {
     await backend.ready();
     settings = await backend.settings();
     applyAppearance();
+    void checkUpdate();
     await refresh();
   } catch (reason) { loading = false; error = String(reason); render(); }
 })();

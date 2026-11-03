@@ -57,6 +57,8 @@ export function demoBackend(): Backend {
     settings: async () => settings,
     updateSettings: async next => { settings = next; },
     openPort: async port => { window.open(`http://localhost:${port}`, '_blank'); },
+    updateVersion: async () => params.has('update') ? '0.2.0' : null,
+    installUpdate: async () => { await new Promise(resolve => setTimeout(resolve, 1500)); },
     ready: async () => {}, resize: async () => {}, close: async () => {}, quit: async () => {},
   };
 }

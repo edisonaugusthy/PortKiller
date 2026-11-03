@@ -20,6 +20,8 @@ export async function createBackend(): Promise<Backend> {
     settings: () => invoke<Settings>('get_settings'),
     updateSettings: settings => invoke('set_settings', { settings }),
     openPort: port => invoke('open_port', { port }),
+    updateVersion: () => invoke<string | null>('update_version'),
+    installUpdate: () => invoke('install_update'),
     ready: async () => {
       const geometry = await invoke<{maxHeight: number}>('menu_ready');
       document.documentElement.style.setProperty('--max-menu-height', `${geometry.maxHeight}px`);

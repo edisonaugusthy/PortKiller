@@ -1,0 +1,96 @@
+name: Release
+
+# Run by hand: Actions › Release › Run workflow.
+# Publishes "PortKiller <version>" as a GitHub Release, using the version in src-tauri/tauri.conf.json,
+# with installers, signed update packages and latest.json, which the apps read to offer updates.
+#
+# Website download links always point at the newest release:
+#   Windows: https://github.com/edisonaugusthy/PortKiller/releases/latest/download/PortKiller-Windows-Setup.exe
+#   macOS:   https://github.com/edisonaugusthy/PortKiller/releases/latest/download/PortKiller-macOS.dmg  (once the macOS job is enabled)
+#
+# Repository secrets:
+#   TAURI_SIGNING_PRIVATE_KEY           contents of ~/.tauri/portkiller-updater.key (signs update packages)
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  its password; leave unset if it has none
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - id: build
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: v__VERSION__
+          releaseName: PortKiller __VERSION__
+          releaseBody: Download PortKiller for your computer below. The app offers this update automatically.
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
+          args: --bundles nsis --config src-tauri/tauri.release.conf.json
+      # A fixed file name, so the website's link always gets the newest installer.
+      - name: Add the website download
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cp src-tauri/target/release/bundle/nsis/*-setup.exe PortKiller-Windows-Setup.exe
+          gh release upload "v${{ steps.build.outputs.appVersion }}" PortKiller-Windows-Setup.exe --clobber
+
+  # macOS: enable once there is an Apple Developer ID certificate. Unsigned macOS apps are blocked by
+  # Gatekeeper, so the DMG is not published until it can be signed and notarized.
+  # Extra repository secrets: APPLE_CERTIFICATE (base64 .p12), APPLE_CERTIFICATE_PASSWORD,
+  # APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_PASSWORD (app-specific password) and APPLE_TEAM_ID.
+  #
+  # macos:
+  #   runs-on: macos-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-node@v4
+  #       with:
+  #         node-version: 22
+  #         cache: npm
+  #     - uses: dtolnay/rust-toolchain@stable
+  #       with:
+  #         targets: aarch64-apple-darwin,x86_64-apple-darwin
+  #     - run: npm ci
+  #     - id: build
+  #       uses: tauri-apps/tauri-action@v0
+  #       env:
+  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #         TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+  #         TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+  #         APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+  #         APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+  #         APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+  #         APPLE_ID: ${{ secrets.APPLE_ID }}
+  #         APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+  #         APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+  #       with:
+  #         tagName: v__VERSION__
+  #         releaseName: PortKiller __VERSION__
+  #         releaseDraft: false
+  #         includeUpdaterJson: true
+  #         # One app for Apple silicon and Intel Macs.
+  #         args: --target universal-apple-darwin --bundles app,dmg --config src-tauri/tauri.release.conf.json
+  #     - name: Add the website download
+  #       env:
+  #         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #       run: |
+  #         cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg PortKiller-macOS.dmg
+  #         gh release upload "v${{ steps.build.outputs.appVersion }}" PortKiller-macOS.dmg --clobber

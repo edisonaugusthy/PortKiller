@@ -41,6 +41,10 @@ export interface Backend {
   settings(): Promise<Settings>;
   updateSettings(settings: Settings): Promise<void>;
   openPort(port: number): Promise<void>;
+  /** A newer version on GitHub Releases, or null. Checked at most every few hours. */
+  updateVersion(): Promise<string | null>;
+  /** Downloads, verifies and installs the update, then restarts PortKiller. */
+  installUpdate(): Promise<void>;
   ready(): Promise<void>;
   resize(height: number): Promise<void>;
   close(): Promise<void>;

@@ -2,6 +2,13 @@
 
 A small menu bar and tray app for macOS and Windows, built with Tauri 2, Rust, TypeScript and the system web view (WebKit on macOS, WebView2 on Windows). It shows which apps are listening on which ports and stops them safely.
 
+## Download
+
+- Windows: [PortKiller-Windows-Setup.exe](https://github.com/edisonaugusthy/PortKiller/releases/latest/download/PortKiller-Windows-Setup.exe)
+- macOS: coming once the app can be signed and notarized; build it yourself meanwhile (see Development).
+
+These links always point at the newest release, so a website can use them directly.
+
 ## Use
 
 Open `src-tauri/target/release/bundle/macos/PortKiller.app` after building. Click its socket icon in the menu bar. Right-click the icon to quit.
@@ -28,6 +35,10 @@ The same app runs from the system tray, built with `npm run tauri build` on Wind
 - Ownership is checked by the process's Windows user (SID) instead of a Unix UID, and anything under the Windows folder is hidden and protected.
 
 The Windows code compiles and passes Clippy from macOS, and CI builds and tests it on Windows; see `docs/verification.md`.
+
+## Updates
+
+While the menu is open, PortKiller asks GitHub Releases for a newer version, at most every six hours. When there is one, the list shows "Version x.y.z is available" with **Update**, which downloads it, checks its signature against the public key built into the app, installs it and restarts. Only the release check is sent to GitHub; nothing about you or your processes.
 
 ## Resource use
 
@@ -71,10 +82,17 @@ The Tauri npm wrapper also finds an existing stable Rust toolchain when its comm
 
 Everything that differs between operating systems lives in `src-tauri/src/platform/` (`macos.rs`, `windows.rs`), behind the same eight functions: `listeners`, `identity`, `resources`, `read_details`, `signal`, `icon_source`, `icon_png` and `open_url`. The rest of the Rust code and the whole frontend are shared.
 
+## Releasing
+
+1. Set the new version in `package.json`, `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, then commit and push.
+2. Run **Actions › Release › Run workflow** on GitHub. It builds the Windows installer, signs the update package, and publishes `PortKiller <version>` with `latest.json`, which installed apps read to offer the update.
+
+Update packages are signed with the private key from `npm run tauri signer generate` (kept outside the repository, in `~/.tauri/portkiller-updater.key`) and stored as the `TAURI_SIGNING_PRIVATE_KEY` repository secret. The matching public key is in `tauri.conf.json`. If the private key is lost, installed apps cannot accept further updates and must be reinstalled from the website. The macOS job is in the workflow but commented out until an Apple Developer ID is available.
+
 ## Process controls
 
 All inspection and signalling runs in Rust. The frontend has no shell, filesystem, or network plugin; Open builds the `http://localhost:<port>` URL in Rust from a port number. Before a stop, Rust validates the process owner (UID and real UID on macOS, the user SID on Windows), executable path, PID start time, and the complete current set of TCP listening ports. Changed identities or port sets are rejected for review. System processes, PID 0/1 (0–4 on Windows), negative PIDs, and PortKiller itself cannot be stopped. No `sudo` or privilege helper is used.
 
-App icons are read by macOS from the app bundle that contains each process; `app_icon` accepts only absolute paths to existing `.app` directories. Commands and working directories remain local and are not written to logs or settings. Pins are stored as executable path and project name. Preferences are stored in the app's configuration directory. The app has no analytics, telemetry, or remote assets.
+App icons are read by macOS from the app bundle that contains each process; `app_icon` accepts only absolute paths to existing `.app` directories. Commands and working directories remain local and are not written to logs or settings. Pins are stored as executable path and project name. Preferences are stored in the app's configuration directory. The app has no analytics, telemetry, or remote assets; its only network request is the update check described above.
 
 The bundled app is for local use; public distribution would require your Apple signing identity and notarization on macOS, and a code-signing certificate on Windows so SmartScreen does not warn.

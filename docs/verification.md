@@ -1,3 +1,10 @@
+# Verification — 3 November 2026 (releases and updates)
+
+- Updater: Tauri's updater plugin with the system TLS (Security framework, Schannel), so no extra crypto library is compiled in. `cargo clippy -D warnings` passed for macOS and for Windows (cross-checked from macOS); `cargo test` 8 passed.
+- A local release build with the signing key (`--config src-tauri/tauri.release.conf.json`) produced `PortKiller.app.tar.gz` and its `.sig`; a normal `npm run tauri build` without the key still works.
+- Browser demo (`?demo&update`, with and without `&windows`): the list shows "Version 0.2.0 is available" with Update.
+- `.github/workflows/release.yml` and `ci.yml` parse as YAML. Neither has run on GitHub yet, so the published release, `latest.json` and an in-app update from one real version to the next are still unverified.
+
 # Verification — 3 November 2026 (Windows port)
 
 ## Windows support

@@ -16,6 +16,7 @@ use tauri::{
     WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_autostart::ManagerExt;
+use tauri_plugin_updater::UpdaterExt;
 
 const WIDTH: f64 = 360.0;
 /// Space between the menu bar and the top of the menu.
@@ -23,6 +24,8 @@ const GAP: f64 = 6.0;
 /// The menu never grows past this, or past 70% of the screen; the port list scrolls instead.
 const MAX_HEIGHT: f64 = 680.0;
 const MAX_PINS: usize = 500;
+/// GitHub is asked for a newer release at most this often, and only while the menu is open.
+const UPDATE_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -85,6 +88,8 @@ struct AppState {
     last_count: Mutex<Option<usize>>,
     anchor: Mutex<Option<(Rect, PhysicalPosition<f64>)>>,
     last_closed: Mutex<Option<Instant>>,
+    /// When the last update check started, and the newer version it found.
+    update: Mutex<(Option<Instant>, Option<String>)>,
 }
 
 fn lock_error() -> String {
@@ -336,6 +341,54 @@ fn app_icon(bundle: String) -> Option<String> {
     ))
 }
 
+/// The newer version on GitHub Releases, if there is one.
+#[tauri::command]
+async fn update_version(app: AppHandle) -> Result<Option<String>, String> {
+    let state = app.state::<AppState>();
+    let due = {
+        let mut update = state.update.lock().map_err(|_| lock_error())?;
+        let due = update
+            .0
+            .is_none_or(|checked| checked.elapsed() >= UPDATE_INTERVAL);
+        if due {
+            update.0 = Some(Instant::now());
+        }
+        due
+    };
+    if due {
+        // Offline or a GitHub hiccup is not worth an error; the next check tries again.
+        let found = match app.updater() {
+            Ok(updater) => updater
+                .check()
+                .await
+                .ok()
+                .flatten()
+                .map(|update| update.version),
+            Err(_) => None,
+        };
+        state.update.lock().map_err(|_| lock_error())?.1 = found;
+    }
+    let version = state.update.lock().map_err(|_| lock_error())?.1.clone();
+    Ok(version)
+}
+
+/// Downloads the newer version, checks its signature, installs it and restarts PortKiller.
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<(), String> {
+    let update = app
+        .updater()
+        .map_err(|e| e.to_string())?
+        .check()
+        .await
+        .map_err(|e| format!("Could not check for updates: {e}"))?
+        .ok_or("PortKiller is up to date")?;
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|e| format!("Could not install the update: {e}"))?;
+    app.restart()
+}
+
 #[tauri::command]
 fn close_menu(window: WebviewWindow) -> Result<(), String> {
     window.destroy().map_err(|e| e.to_string())
@@ -455,6 +508,7 @@ fn tray_image() -> Image<'static> {
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
@@ -469,6 +523,8 @@ pub fn run() {
             resize_menu,
             open_port,
             app_icon,
+            update_version,
+            install_update,
             close_menu,
             quit_app
         ])
