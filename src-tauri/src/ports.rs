@@ -1,8 +1,8 @@
+use crate::platform;
 use crate::scanner::{self, ProcessDetails, Scanner, Snapshot, StopOutcome};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
-    process::{Command, Stdio},
     sync::Mutex,
     time::{Duration, Instant},
 };
@@ -18,8 +18,6 @@ use tauri::{
 use tauri_plugin_autostart::ManagerExt;
 
 const WIDTH: f64 = 360.0;
-/// Corner radius of the menu's glass, matched by the page's panel.
-const RADIUS: f64 = 16.0;
 /// Space between the menu bar and the top of the menu.
 const GAP: f64 = 6.0;
 /// The menu never grows past this, or past 70% of the screen; the port list scrolls instead.
@@ -101,12 +99,22 @@ fn update_count(app: &AppHandle, count: Option<usize>) {
         .map(|settings| settings.show_count)
         .unwrap_or(false);
     if let Some(tray) = app.tray_by_id("ports") {
-        let title = if enabled {
-            count.map(|count| count.to_string())
+        // macOS shows the count beside the icon. Windows tray icons cannot show text, so it goes in the tooltip.
+        if cfg!(target_os = "macos") {
+            let title = if enabled {
+                count.map(|count| count.to_string())
+            } else {
+                None
+            };
+            let _ = tray.set_title(title.as_deref());
         } else {
-            None
-        };
-        let _ = tray.set_title(title.as_deref());
+            let tooltip = match count {
+                Some(1) => "PortKiller · 1 open port".to_string(),
+                Some(count) => format!("PortKiller · {count} open ports"),
+                None => "PortKiller".to_string(),
+            };
+            let _ = tray.set_tooltip(Some(tooltip));
+        }
     }
 }
 
@@ -246,7 +254,7 @@ fn place_menu(
         .anchor
         .lock()
         .map_err(|_| lock_error())?;
-    let (rect, point) = anchor.ok_or("Menu bar position is unavailable")?;
+    let (rect, point) = anchor.ok_or("Tray icon position is unavailable")?;
     let monitor = app
         .monitor_from_point(point.x, point.y)
         .map_err(|e| e.to_string())?
@@ -263,12 +271,24 @@ fn place_menu(
         left + 4.0 * scale,
         (right - (WIDTH + 4.0) * scale).max(left + 4.0 * scale),
     );
-    let y = (origin.y + size.height).max(f64::from(area.position.y)) + GAP * scale;
-    let max_height = ((f64::from(area.position.y) + f64::from(area.size.height) - y) / scale
-        - 12.0)
+    let top = f64::from(area.position.y);
+    let bottom = top + f64::from(area.size.height);
+    // The macOS menu bar is at the top; a Windows taskbar is usually at the bottom. Open away from it.
+    let above = origin.y + size.height / 2.0 > top + f64::from(area.size.height) / 2.0;
+    let room = if above {
+        origin.y.min(bottom) - top
+    } else {
+        bottom - (origin.y + size.height).max(top)
+    };
+    let max_height = (room / scale - GAP - 12.0)
         .min(f64::from(area.size.height) / scale * 0.7)
         .clamp(100.0, MAX_HEIGHT);
     let height = height.clamp(100.0, max_height);
+    let y = if above {
+        origin.y.min(bottom) - (GAP + height) * scale
+    } else {
+        (origin.y + size.height).max(top) + GAP * scale
+    };
     window
         .set_size(LogicalSize::new(WIDTH, height))
         .map_err(|e| e.to_string())?;
@@ -301,79 +321,19 @@ fn open_port(port: u16) -> Result<(), String> {
     if port == 0 {
         return Err("Invalid port".into());
     }
-    Command::new("/usr/bin/open")
-        .arg(format!("http://localhost:{port}"))
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("Could not open the browser: {e}"))
+    platform::open_url(&format!("http://localhost:{port}"))
 }
 
-/// An app bundle's icon as a 52px PNG data URL (26pt at 2x), or `None` when there is none.
+/// An app's icon as a 52px PNG data URL (26pt at 2x), or `None` when there is none.
 /// Synchronous, so Tauri runs it on the main thread as AppKit expects.
 #[tauri::command]
 fn app_icon(bundle: String) -> Option<String> {
     use base64::Engine;
-    let path = std::path::Path::new(&bundle);
-    if bundle.len() > 4096 || !path.is_absolute() || !bundle.ends_with(".app") || !path.is_dir() {
-        return None;
-    }
-    let png = icon::png(&bundle, 52)?;
+    let png = platform::icon_png(&bundle, 52)?;
     Some(format!(
         "data:image/png;base64,{}",
         base64::engine::general_purpose::STANDARD.encode(png)
     ))
-}
-
-#[cfg(target_os = "macos")]
-mod icon {
-    use objc2::AllocAnyThread;
-    use objc2_app_kit::{
-        NSBitmapImageFileType, NSBitmapImageRep, NSDeviceRGBColorSpace, NSGraphicsContext,
-        NSWorkspace,
-    };
-    use objc2_foundation::{NSDictionary, NSPoint, NSRect, NSSize, NSString};
-
-    /// Draws the Finder icon of `path` into a square bitmap and encodes it as PNG.
-    pub fn png(path: &str, size: isize) -> Option<Vec<u8>> {
-        let image = NSWorkspace::sharedWorkspace().iconForFile(&NSString::from_str(path));
-        // SAFETY: null planes ask AppKit to allocate the pixel buffer.
-        let rep = unsafe {
-            NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
-                NSBitmapImageRep::alloc(),
-                std::ptr::null_mut(),
-                size,
-                size,
-                8,
-                4,
-                true,
-                false,
-                NSDeviceRGBColorSpace,
-                0,
-                0,
-            )
-        }?;
-        let context = NSGraphicsContext::graphicsContextWithBitmapImageRep(&rep)?;
-        NSGraphicsContext::saveGraphicsState_class();
-        NSGraphicsContext::setCurrentContext(Some(&context));
-        let side = size as f64;
-        image.drawInRect(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(side, side)));
-        NSGraphicsContext::restoreGraphicsState_class();
-        // SAFETY: an empty property dictionary is valid for PNG.
-        let data = unsafe {
-            rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new())
-        }?;
-        Some(data.to_vec())
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-mod icon {
-    pub fn png(_path: &str, _size: isize) -> Option<Vec<u8>> {
-        None
-    }
 }
 
 #[tauri::command]
@@ -384,6 +344,23 @@ fn close_menu(window: WebviewWindow) -> Result<(), String> {
 #[tauri::command]
 fn quit_app(app: AppHandle) {
     app.exit(0);
+}
+
+/// macOS: Liquid Glass on 26+, the popover material before that. Windows: Acrylic, like system flyouts.
+/// Reduce Transparency (macOS) and transparency effects off (Windows) make them solid.
+fn glass() -> WindowEffectsConfig {
+    WindowEffectsConfig {
+        effects: if cfg!(target_os = "macos") {
+            vec![Effect::LiquidGlassRegular, Effect::Popover]
+        } else {
+            vec![Effect::Acrylic]
+        },
+        state: Some(EffectState::Active),
+        // Matches the page's panel; Windows 11 rounds its own corners.
+        radius: Some(16.0),
+        color: None,
+        interactive: false,
+    }
 }
 
 fn open_menu(app: &AppHandle, rect: Rect, point: PhysicalPosition<f64>) -> Result<(), String> {
@@ -413,15 +390,8 @@ fn open_menu(app: &AppHandle, rect: Rect, point: PhysicalPosition<f64>) -> Resul
         .resizable(false)
         .decorations(false)
         .transparent(true)
-        // macOS draws and blurs the glass, so the page paints no backdrop of its own.
-        // Liquid Glass on macOS 26+, the popover material before that; Reduce Transparency makes both solid.
-        .effects(WindowEffectsConfig {
-            effects: vec![Effect::LiquidGlassRegular, Effect::Popover],
-            state: Some(EffectState::Active),
-            radius: Some(RADIUS),
-            color: None,
-            interactive: false,
-        })
+        // The system draws and blurs the glass, so the page paints no backdrop of its own.
+        .effects(glass())
         .theme(theme)
         .shadow(true)
         .visible(false)
@@ -451,7 +421,14 @@ fn open_menu(app: &AppHandle, rect: Rect, point: PhysicalPosition<f64>) -> Resul
     Ok(())
 }
 
+/// Windows: the colour app icon, which reads on light and dark taskbars alike.
+#[cfg(windows)]
+fn tray_image() -> Image<'static> {
+    Image::from_bytes(include_bytes!("../icons/32x32.png")).expect("bundled tray icon")
+}
+
 /// The menu bar glyph: a rounded socket with two slots, drawn as a 32px template image.
+#[cfg(not(windows))]
 fn tray_image() -> Image<'static> {
     const SIZE: usize = 32;
     // Signed distance to a rounded rectangle centred at (cx, cy).
@@ -515,7 +492,7 @@ pub fn run() {
             let menu = Menu::with_items(app, &[&quit])?;
             TrayIconBuilder::with_id("ports")
                 .icon(tray_image())
-                .icon_as_template(true)
+                .icon_as_template(cfg!(target_os = "macos"))
                 .tooltip("PortKiller")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
@@ -544,6 +521,9 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("Could not start PortKiller")
         .run(|app, event| {
+            // Relaunching a running app opens the menu; only macOS reports that.
+            #[cfg(not(target_os = "macos"))]
+            let _ = app;
             #[cfg(target_os = "macos")]
             if let RunEvent::Reopen { .. } = &event {
                 if let Some(window) = app.get_webview_window("main") {
@@ -563,15 +543,4 @@ pub fn run() {
                 api.prevent_exit();
             }
         });
-}
-
-#[cfg(all(test, target_os = "macos"))]
-mod tests {
-    #[test]
-    fn app_icons_render_as_png() {
-        let png = super::icon::png("/System/Applications/Calculator.app", 64).unwrap();
-        assert!(png.starts_with(b"\x89PNG"));
-        assert!(super::app_icon("/usr/bin/true".into()).is_none());
-        assert!(super::app_icon("relative.app".into()).is_none());
-    }
 }

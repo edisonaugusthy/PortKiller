@@ -1,3 +1,14 @@
+# Verification — 3 November 2026 (Windows port)
+
+## Windows support
+
+PortKiller now builds for Windows from the same code. Platform code moved into `src-tauri/src/platform/macos.rs` (unchanged behavior) and a new `windows.rs` that uses `netstat2` for the listening-socket table, `sysinfo` for process identity, owner, CPU, memory, command line and folder, and `taskkill /F` to end a process. The frontend switches to a Windows 11 look and wording ("End task", "Start with Windows", "Exit") when it runs on Windows.
+
+- macOS: `cargo test` 8 passed, `cargo clippy --all-targets -D warnings` and `cargo fmt --check` passed, TypeScript and Vite build passed (17.5 kB JS, 11.9 kB CSS before compression), and the browser demo still shows the macOS look and wording.
+- Windows, compiled from macOS: `cargo clippy --target x86_64-pc-windows-msvc --all-targets -- -D warnings` passed. Tauri's build script needs Windows' resource compiler, which macOS lacks; a scratch stand-in that writes an empty resource file was used for this check only. Nothing Windows-specific has run yet.
+- Browser demo with `?demo&windows`: list, hover End task, confirmation naming every port ("End :3000 and :9229?"), End all, settings with the Windows toggle and drop-downs. No console errors.
+- Not yet verified on Windows: the scan against real processes, ending a process, Acrylic glass, flyout placement above the tray, and the installer. CI (`.github/workflows/ci.yml`) runs tests, Clippy and `tauri build` on `windows-latest` and uploads the installer once the repository is pushed to GitHub.
+
 # Verification — 3 November 2026
 
 ## Liquid Glass revision

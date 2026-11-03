@@ -1,6 +1,6 @@
 # PortKiller
 
-A small macOS menu bar app built with Tauri 2, Rust, TypeScript, and the system WebKit. It shows which apps are listening on which ports and stops them safely.
+A small menu bar and tray app for macOS and Windows, built with Tauri 2, Rust, TypeScript and the system web view (WebKit on macOS, WebView2 on Windows). It shows which apps are listening on which ports and stops them safely.
 
 ## Use
 
@@ -18,6 +18,17 @@ Open `src-tauri/target/release/bundle/macos/PortKiller.app` after building. Clic
 
 This version shows TCP servers, not outgoing client connections or UDP sockets. Containers and virtual machines can expose a host proxy process; PortKiller manages that host process, not services inside the guest. Supervisors may restart processes after they are stopped.
 
+### On Windows
+
+The same app runs from the system tray, built with `npm run tauri build` on Windows (`src-tauri/target/release/bundle/nsis/`). It follows Windows 11's look: the flyout opens above the tray on Acrylic, with Segoe UI and Windows controls. The differences:
+
+- **End task** ends the process at once (`taskkill /F`). Windows cannot reliably ask a console server such as Node or Python to shut down cleanly, so there is no separate Force quit. Confirmations still name every affected port.
+- Tray icons cannot show text, so the open-port count is in the icon's tooltip and the Count setting is hidden. Open at login is called Start with Windows.
+- Rows show runtime glyphs; reading `.exe` icons is not implemented yet.
+- Ownership is checked by the process's Windows user (SID) instead of a Unix UID, and anything under the Windows folder is hidden and protected.
+
+The Windows code compiles and passes Clippy from macOS, and CI builds and tests it on Windows; see `docs/verification.md`.
+
 ## Resource use
 
 The tray runs without a dock icon or a resident webview. The popover is created on demand and destroyed on dismissal. There are no background scan timers. The count in the menu bar is the last observed count and refreshes when opened.
@@ -32,7 +43,7 @@ The release frontend has about 17 KB of JavaScript and 9 KB of CSS before compre
 
 ## Development
 
-Requires macOS 14.5+, Xcode Command Line Tools, Node.js 22.12+ (or a compatible current release), and Rust 1.90+.
+Requires Node.js 22.12+ (or a compatible current release) and Rust 1.90+, plus macOS 14.5+ with Xcode Command Line Tools, or Windows 10/11 with the Visual Studio C++ Build Tools and the WebView2 runtime (preinstalled on Windows 11).
 
 ```sh
 npm install
@@ -44,7 +55,7 @@ The app opens in the menu bar. For a browser-only UI preview with explicitly sim
 ```sh
 npm run dev
 # Open http://127.0.0.1:1420/?demo
-# Add &dense for a 27-app layout check, or &empty for the empty state.
+# Add &dense for a 27-app layout check, &empty for the empty state, or &windows for the Windows look.
 ```
 
 The demo adapter is removed from production builds. Native releases always query real processes.
@@ -56,12 +67,14 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 npm run tauri build
 ```
 
-The Tauri npm wrapper also finds an existing stable Rust toolchain when its command shims are missing from PATH.
+The Tauri npm wrapper also finds an existing stable Rust toolchain when its command shims are missing from PATH. CI (`.github/workflows/ci.yml`) runs the same checks and builds on macOS and Windows.
+
+Everything that differs between operating systems lives in `src-tauri/src/platform/` (`macos.rs`, `windows.rs`), behind the same eight functions: `listeners`, `identity`, `resources`, `read_details`, `signal`, `icon_source`, `icon_png` and `open_url`. The rest of the Rust code and the whole frontend are shared.
 
 ## Process controls
 
-All inspection and signalling runs in Rust. The frontend has no shell, filesystem, or network plugin; Open builds the `http://localhost:<port>` URL in Rust from a port number. Before a stop, Rust validates the process UID, real UID, executable path, PID start time, and the complete current set of TCP listening ports. Changed identities or port sets are rejected for review. System processes, PID 0/1, negative PIDs, and PortKiller itself cannot be signalled. No `sudo` or privilege helper is used.
+All inspection and signalling runs in Rust. The frontend has no shell, filesystem, or network plugin; Open builds the `http://localhost:<port>` URL in Rust from a port number. Before a stop, Rust validates the process owner (UID and real UID on macOS, the user SID on Windows), executable path, PID start time, and the complete current set of TCP listening ports. Changed identities or port sets are rejected for review. System processes, PID 0/1 (0–4 on Windows), negative PIDs, and PortKiller itself cannot be stopped. No `sudo` or privilege helper is used.
 
-App icons are read by macOS from the app bundle that contains each process; `app_icon` accepts only absolute paths to existing `.app` directories. Commands and working directories remain local and are not written to logs or settings. Pins are stored as executable path and project name. Preferences are stored in the app's macOS configuration directory. The app has no analytics, telemetry, or remote assets.
+App icons are read by macOS from the app bundle that contains each process; `app_icon` accepts only absolute paths to existing `.app` directories. Commands and working directories remain local and are not written to logs or settings. Pins are stored as executable path and project name. Preferences are stored in the app's configuration directory. The app has no analytics, telemetry, or remote assets.
 
-The bundled app is for local use; public distribution would require your Apple signing identity and notarization.
+The bundled app is for local use; public distribution would require your Apple signing identity and notarization on macOS, and a code-signing certificate on Windows so SmartScreen does not warn.

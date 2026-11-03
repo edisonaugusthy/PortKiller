@@ -1,9 +1,8 @@
+use crate::platform;
 use serde::Serialize;
 use std::{
     collections::{BTreeSet, HashMap},
-    io::Read,
     path::Path,
-    process::{Command, Stdio},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -32,7 +31,7 @@ pub struct PortProcess {
     pub started_at: u64,
     pub idle_seconds: Option<u64>,
     pub listeners: Vec<Listener>,
-    /// The enclosing `.app` bundle, whose icon the menu shows.
+    /// Where the menu reads this process's icon from (an `.app` bundle on macOS, the `.exe` on Windows).
     pub bundle: Option<String>,
 }
 
@@ -61,262 +60,25 @@ struct Activity {
     last_active: SystemTime,
 }
 
+/// A listening process as the platform reports it, before PortKiller adds its own details.
 #[derive(Default, Debug)]
-struct RawProcess {
-    pid: i32,
-    name: String,
-    uid: Option<u32>,
-    listeners: BTreeSet<Listener>,
+pub(crate) struct RawProcess {
+    pub pid: i32,
+    pub name: String,
+    pub listeners: BTreeSet<Listener>,
 }
 
+/// Who a PID is right now. The token changes if the PID is reused by another process.
 #[derive(Debug)]
-struct Identity {
-    token: String,
-    executable: String,
-    started_at: u64,
-}
-
-/// Bounded subprocesses, no shell interpolation. Only used while the popover is open.
-fn command_output(program: &str, args: &[&str]) -> Result<(bool, String), String> {
-    let mut child = Command::new(program)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("Could not run {program}: {e}"))?;
-    let stdout = child.stdout.take().ok_or("Could not read process output")?;
-    let reader = std::thread::spawn(move || {
-        let mut data = Vec::new();
-        stdout
-            .take(2 * 1024 * 1024)
-            .read_to_end(&mut data)
-            .map(|_| data)
-    });
-    let started = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if started.elapsed() < Duration::from_secs(3) => {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            result => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = reader.join();
-                return Err(match result {
-                    Err(e) => format!("Could not inspect processes: {e}"),
-                    _ => "Process scan timed out. Try refreshing.".into(),
-                });
-            }
-        }
-    };
-    let data = reader
-        .join()
-        .map_err(|_| "Process output reader failed")?
-        .map_err(|e| e.to_string())?;
-    if data.len() >= 2 * 1024 * 1024 {
-        return Err("Process output exceeded the scan limit".into());
-    }
-    Ok((
-        status.success(),
-        String::from_utf8_lossy(&data).into_owned(),
-    ))
-}
-
-fn parse_listeners(output: &str) -> Vec<RawProcess> {
-    let mut processes = Vec::new();
-    let mut current = RawProcess::default();
-    for line in output.lines().filter(|line| !line.is_empty()) {
-        let Some(value) = line.get(1..) else { continue };
-        let tag = &line[..1];
-        match tag {
-            "p" => {
-                if current.pid > 0 && !current.listeners.is_empty() {
-                    processes.push(current);
-                }
-                current = RawProcess {
-                    pid: value.parse().unwrap_or(0),
-                    ..Default::default()
-                };
-            }
-            "c" => current.name = value.to_string(),
-            "u" => current.uid = value.parse().ok(),
-            "n" => {
-                if let Some((address, port)) = value.rsplit_once(':') {
-                    if let Ok(port) = port.parse::<u16>() {
-                        current.listeners.insert(Listener {
-                            port,
-                            address: address.trim_matches(['[', ']']).to_string(),
-                        });
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    if current.pid > 0 && !current.listeners.is_empty() {
-        processes.push(current);
-    }
-    processes
-}
-
-fn current_uid() -> u32 {
-    // getuid has no arguments or pointer preconditions.
-    unsafe { libc::getuid() }
-}
-
-fn listeners() -> Result<Vec<RawProcess>, String> {
-    let uid = current_uid().to_string();
-    let (success, output) = command_output(
-        "/usr/sbin/lsof",
-        &[
-            "-nP",
-            "-w",
-            "-a",
-            "-u",
-            &uid,
-            "-iTCP",
-            "-sTCP:LISTEN",
-            "-Fpcun",
-        ],
-    )?;
-    // lsof returns 1 for an empty selection, including when no servers are running.
-    if !success && !output.is_empty() {
-        return Err("Could not read listening ports".into());
-    }
-    Ok(parse_listeners(&output))
-}
-
-fn system_executable(executable: &str) -> bool {
-    executable.starts_with("/System/")
-        || executable.starts_with("/usr/libexec/")
-        || executable.starts_with("/usr/sbin/")
-        || executable.starts_with("/sbin/")
-        || executable.contains("/PortKiller.app/")
-}
-
-#[cfg(target_os = "macos")]
-fn identity(pid: i32) -> Result<Identity, String> {
-    use libproc::{
-        bsd_info::BSDInfo,
-        proc_pid::{pidinfo, pidpath},
-    };
-    if pid <= 1 || pid == std::process::id() as i32 {
-        return Err("This process is protected".into());
-    }
-    let info = pidinfo::<BSDInfo>(pid, 0).map_err(|_| "The process has exited")?;
-    if info.pbi_uid != current_uid() || info.pbi_ruid != current_uid() {
-        return Err("Only your own processes can be managed".into());
-    }
-    let executable = pidpath(pid).map_err(|_| "Process executable is unavailable")?;
-    if system_executable(&executable) {
-        return Err("System services are protected".into());
-    }
-    Ok(Identity {
-        token: format!("{pid}:{}:{}", info.pbi_start_tvsec, info.pbi_start_tvusec),
-        executable,
-        started_at: info.pbi_start_tvsec,
-    })
-}
-
-#[cfg(not(target_os = "macos"))]
-fn identity(_pid: i32) -> Result<Identity, String> {
-    Err("PortKiller requires macOS".into())
-}
-
-#[cfg(target_os = "macos")]
-fn ticks_to_ns(ticks: u64) -> u64 {
-    #[repr(C)]
-    struct Timebase {
-        numer: u32,
-        denom: u32,
-    }
-    extern "C" {
-        fn mach_timebase_info(info: *mut Timebase) -> i32;
-    }
-    static RATIO: std::sync::OnceLock<(u64, u64)> = std::sync::OnceLock::new();
-    let (numer, denom) = *RATIO.get_or_init(|| {
-        let mut info = Timebase { numer: 1, denom: 1 };
-        // Writes two integers into a valid, exclusively borrowed struct.
-        if unsafe { mach_timebase_info(&mut info) } != 0 || info.denom == 0 {
-            return (1, 1);
-        }
-        (u64::from(info.numer), u64::from(info.denom))
-    });
-    (u128::from(ticks) * u128::from(numer) / u128::from(denom)) as u64
-}
-
-/// Resident memory in bytes and total CPU time in nanoseconds.
-#[cfg(target_os = "macos")]
-fn resources(pid: i32) -> (Option<u64>, Option<u64>) {
-    use libproc::{proc_pid::pidinfo, task_info::TaskInfo};
-    match pidinfo::<TaskInfo>(pid, 0) {
-        // Task CPU times are Mach absolute ticks, which are not nanoseconds on Apple Silicon.
-        Ok(info) => (
-            Some(info.pti_resident_size),
-            Some(ticks_to_ns(
-                info.pti_total_user.saturating_add(info.pti_total_system),
-            )),
-        ),
-        Err(_) => (None, None),
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn resources(_pid: i32) -> (Option<u64>, Option<u64>) {
-    (None, None)
-}
-
-fn read_details(pids: &[i32]) -> HashMap<i32, ProcessDetails> {
-    if pids.is_empty() {
-        return HashMap::new();
-    }
-    let selection = pids
-        .iter()
-        .map(i32::to_string)
-        .collect::<Vec<_>>()
-        .join(",");
-    let mut details = HashMap::new();
-    if let Ok((_, output)) = command_output(
-        "/bin/ps",
-        &["-ww", "-p", &selection, "-o", "pid=", "-o", "command="],
-    ) {
-        for line in output.lines() {
-            let line = line.trim_start();
-            if let Some((pid, command)) = line.split_once(char::is_whitespace) {
-                if let Ok(pid) = pid.parse::<i32>() {
-                    details.insert(
-                        pid,
-                        ProcessDetails {
-                            command: command.trim().to_string(),
-                            cwd: None,
-                        },
-                    );
-                }
-            }
-        }
-    }
-    if let Ok((_, output)) = command_output(
-        "/usr/sbin/lsof",
-        &["-nP", "-w", "-a", "-p", &selection, "-d", "cwd", "-Fpn"],
-    ) {
-        let mut pid = 0;
-        for line in output.lines() {
-            if let Some(value) = line.strip_prefix('p') {
-                pid = value.parse().unwrap_or(0);
-            } else if let Some(path) = line.strip_prefix('n') {
-                if let Some(info) = details.get_mut(&pid) {
-                    info.cwd = Some(path.to_string());
-                }
-            }
-        }
-    }
-    details
+pub(crate) struct Identity {
+    pub token: String,
+    pub executable: String,
+    pub started_at: u64,
 }
 
 fn display_name(name: &str, command: &str) -> String {
-    let command = command.to_lowercase();
+    // Windows command lines use backslashes; match them like macOS paths.
+    let command = command.to_lowercase().replace('\\', "/");
     if command.contains("next/dist/") || command.contains("next-server") {
         return "Next.js".into();
     }
@@ -356,13 +118,6 @@ fn display_name(name: &str, command: &str) -> String {
     name.to_string()
 }
 
-/// `/Applications/Docker.app/Contents/MacOS/x` → `/Applications/Docker.app`.
-fn bundle_path(executable: &str) -> Option<String> {
-    executable
-        .find(".app/Contents/")
-        .map(|end| executable[..end + 4].to_string())
-}
-
 fn project_name(cwd: Option<&str>) -> String {
     let Some(cwd) = cwd else {
         return "local".into();
@@ -388,13 +143,11 @@ fn project_name(cwd: Option<&str>) -> String {
 
 impl Scanner {
     pub fn scan(&mut self) -> Result<Snapshot, String> {
-        let candidates = listeners()?
+        let candidates = platform::listeners()?
             .into_iter()
             .filter_map(|process| {
-                if process.uid != Some(current_uid()) {
-                    return None;
-                }
-                let identity = identity(process.pid).ok()?;
+                // Other users' processes, system services and PortKiller itself fail here.
+                let identity = platform::identity(process.pid).ok()?;
                 Some((process, identity))
             })
             .collect::<Vec<_>>();
@@ -403,13 +156,13 @@ impl Scanner {
             .filter(|(_, id)| !self.cache.contains_key(&id.token))
             .map(|(process, _)| process.pid)
             .collect::<Vec<_>>();
-        let mut metadata = read_details(&new_pids);
+        let mut metadata = platform::read_details(&new_pids);
         let now = Instant::now();
         let wall = SystemTime::now();
         let mut processes = Vec::new();
         for (process, id) in candidates {
             // Recheck after subprocess metadata collection; do not cache a recycled PID.
-            if !identity(process.pid).is_ok_and(|current| current.token == id.token) {
+            if !platform::identity(process.pid).is_ok_and(|current| current.token == id.token) {
                 continue;
             }
             let info = self.cache.entry(id.token.clone()).or_insert_with(|| {
@@ -418,7 +171,7 @@ impl Scanner {
                     cwd: None,
                 })
             });
-            let (memory_bytes, total_cpu) = resources(process.pid);
+            let (memory_bytes, total_cpu) = platform::resources(process.pid);
             let cpu_percent = total_cpu.and_then(|total| {
                 let previous = self.cpu.insert(id.token.clone(), (now, total));
                 previous.and_then(|(when, before)| {
@@ -463,7 +216,7 @@ impl Scanner {
                 started_at: id.started_at,
                 idle_seconds,
                 listeners: process.listeners.into_iter().collect(),
-                bundle: bundle_path(&id.executable),
+                bundle: platform::icon_source(&id.executable),
                 executable: id.executable,
             });
         }
@@ -492,7 +245,7 @@ impl Scanner {
 
     pub fn details(&mut self, pid: i32, token: &str) -> Result<ProcessDetails, String> {
         validate_identity(pid, token)?;
-        let details = read_details(&[pid])
+        let details = platform::read_details(&[pid])
             .remove(&pid)
             .ok_or("Process details are no longer available")?;
         validate_identity(pid, token)?;
@@ -502,7 +255,7 @@ impl Scanner {
 }
 
 fn validate_identity(pid: i32, token: &str) -> Result<(), String> {
-    if identity(pid)?.token != token {
+    if platform::identity(pid)?.token != token {
         return Err("The process changed. Refresh before stopping it.".into());
     }
     Ok(())
@@ -524,7 +277,7 @@ pub fn stop(
     force: bool,
 ) -> Result<StopOutcome, String> {
     validate_identity(pid, token)?;
-    let actual_ports = listeners()?
+    let actual_ports = platform::listeners()?
         .into_iter()
         .find(|process| process.pid == pid)
         .map(|process| {
@@ -541,17 +294,11 @@ pub fn stop(
         );
     }
     validate_identity(pid, token)?;
-    // Positive PIDs only, current-user ownership and start time checked above. Never signal a group.
-    let result = unsafe { libc::kill(pid, if force { libc::SIGKILL } else { libc::SIGTERM }) };
-    if result != 0 {
-        return Err(format!(
-            "Could not stop process: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
+    // Positive PIDs only, current-user ownership and start time checked above.
+    platform::signal(pid, force)?;
     let started = Instant::now();
     while started.elapsed() < Duration::from_millis(700) {
-        if !identity(pid).is_ok_and(|current| current.token == token) {
+        if !platform::identity(pid).is_ok_and(|current| current.token == token) {
             return Ok(StopOutcome { stopped: true });
         }
         std::thread::sleep(Duration::from_millis(35));
@@ -564,55 +311,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn listener_parser_keeps_ipv6_and_deduplicates_sockets() {
-        let parsed = parse_listeners("p42\ncnode\nu501\nf1\nn127.0.0.1:3000\nf2\nn[::1]:3000\nf3\nn127.0.0.1:3000\np43\ncpython\nu501\nn*:8000\n");
-        assert_eq!(parsed.len(), 2);
-        assert_eq!(parsed[0].listeners.len(), 2);
-        assert!(parsed[0].listeners.contains(&Listener {
-            port: 3000,
-            address: "::1".into()
-        }));
-        assert_eq!(parsed[1].listeners.first().unwrap().port, 8000);
-    }
-
-    #[test]
-    fn system_filter_does_not_hide_development_interpreters() {
-        assert!(system_executable(
-            "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter"
-        ));
-        assert!(system_executable("/usr/libexec/rapportd"));
-        assert!(!system_executable("/usr/bin/python3"));
-        assert!(!system_executable("/opt/homebrew/bin/node"));
-    }
-
-    #[test]
-    fn bundle_path_finds_the_enclosing_app() {
-        assert_eq!(
-            bundle_path("/Applications/Docker.app/Contents/MacOS/com.docker.backend").as_deref(),
-            Some("/Applications/Docker.app")
-        );
-        assert_eq!(bundle_path("/opt/homebrew/bin/node"), None);
-    }
-
-    #[test]
     fn stop_requires_the_reviewed_port_set() {
         assert!(matching_ports(&[3000, 9229], &BTreeSet::from([3000, 9229])));
         assert!(!matching_ports(&[3000], &BTreeSet::from([3000, 9229])));
         assert!(!matching_ports(&[], &BTreeSet::new()));
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn cpu_ticks_convert_to_nanoseconds() {
-        // One second of CPU time must read as roughly one second, whatever the Mach timebase.
-        let busy = Instant::now();
-        while busy.elapsed() < Duration::from_millis(300) {
-            std::hint::black_box(busy.elapsed());
-        }
-        let (_, total) = resources(std::process::id() as i32);
-        let total = Duration::from_nanos(total.unwrap());
-        assert!(total >= Duration::from_millis(250), "{total:?}");
-        assert!(total < Duration::from_secs(600), "{total:?}");
     }
 
     #[test]
@@ -622,10 +324,18 @@ mod tests {
         assert!(stop(std::process::id() as i32, "", &[3000], true).is_err());
     }
 
-    #[cfg(target_os = "macos")]
+    /// Runs on macOS and Windows with a real Python listener; needs `python3` (macOS) or `python` (Windows).
     #[test]
     fn native_scan_and_stop_leave_neighbor_running() {
-        use std::io::{BufRead, BufReader};
+        use std::{
+            io::{BufRead, BufReader},
+            process::{Command, Stdio},
+        };
+        const PYTHON: &str = if cfg!(windows) {
+            "python"
+        } else {
+            "/usr/bin/python3"
+        };
         struct Fixture(std::process::Child);
         impl Drop for Fixture {
             fn drop(&mut self) {
@@ -634,7 +344,7 @@ mod tests {
             }
         }
         fn fixture() -> (Fixture, u16) {
-            let mut child = Command::new("/usr/bin/python3").args(["-u", "-c", "import socket,time; s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(); print(s.getsockname()[1],flush=True); time.sleep(120)"])
+            let mut child = Command::new(PYTHON).args(["-u", "-c", "import socket,time; s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(); print(s.getsockname()[1],flush=True); time.sleep(120)"])
                 .stdout(Stdio::piped()).spawn().unwrap();
             let mut line = String::new();
             BufReader::new(child.stdout.take().unwrap())

@@ -12,6 +12,12 @@ const esc = (value: string | number): string => String(value).replace(/[&<>"']/g
 const app = document.querySelector<HTMLElement>('#app')!;
 
 const IDLE_CHOICES = [15, 30, 60, 180, 720];
+/** Windows gets its own look and words; it has one End task action and no menu bar count. */
+const WINDOWS = navigator.userAgent.includes('Windows') || (import.meta.env.DEV && new URLSearchParams(location.search).has('windows'));
+if (WINDOWS) document.documentElement.dataset.platform = 'windows';
+const WORDS = WINDOWS
+  ? { stop: 'End', stopButton: 'End task', stopAll: 'End all', stopping: 'Ending…', stopped: 'Ended', stopHint: 'End task', login: 'Start with Windows', quit: 'Exit PortKiller' }
+  : { stop: 'Stop', stopButton: 'Stop', stopAll: 'Stop all', stopping: 'Stopping…', stopped: 'Stopped', stopHint: 'Stop · ⌥ Force quit', login: 'Open at login', quit: 'Quit PortKiller' };
 /** The port of the server this page comes from (the dev server in `tauri dev`). Stopping it closes PortKiller. */
 const OWN_PORT = location.protocol.startsWith('http') && location.port ? Number(location.port) : null;
 /** Ports that are not web pages, so they get Copy but no Open. */
@@ -84,7 +90,7 @@ function isIdle(process: PortProcess): boolean {
   return !isPinned(process) && !isOwn(process) && process.idleSeconds !== null && process.idleSeconds >= settings.idleMinutes * 60;
 }
 function stopQuestion(process: PortProcess, force: boolean): string {
-  return `${force ? 'Force quit' : 'Stop'} ${portList(process)}${isOwn(process) ? ' and close PortKiller' : ''}?`;
+  return `${force ? 'Force quit' : WORDS.stop} ${portList(process)}${isOwn(process) ? ' and close PortKiller' : ''}?`;
 }
 function matches(process: PortProcess, needle: string): boolean {
   if (!needle) return true;
@@ -111,9 +117,9 @@ function round(name: IconName, label: string, attributes = '', extra = ''): stri
   return `<button class="round ${extra}" aria-label="${esc(label)}" title="${esc(label)}" ${attributes}>${icon(name)}</button>`;
 }
 
-function confirmBox(question: string, force: boolean, action: string): string {
+function confirmBox(question: string, force: boolean, action: string, label = WORDS.stopButton): string {
   const busy = stopping ? 'disabled' : '';
-  return `<strong>${esc(question)}</strong><button class="text-button" data-action="cancel" ${busy}>Cancel</button><button class="danger" data-action="${action}" ${busy}>${stopping ? 'Stopping…' : force ? 'Force quit' : 'Stop'}</button>`;
+  return `<strong>${esc(question)}</strong><button class="text-button" data-action="cancel" ${busy}>Cancel</button><button class="danger" data-action="${action}" ${busy}>${stopping ? WORDS.stopping : force ? 'Force quit' : label}</button>`;
 }
 
 function row(process: PortProcess): string {
@@ -127,7 +133,7 @@ function row(process: PortProcess): string {
     <button class="open" data-action="open" data-id="${esc(process.identity)}" aria-label="${esc(`${title(process)}, port ${list[0]}`)}">
       ${processIcon(process)}<span class="name">${esc(isOwn(process) ? 'PortKiller' : title(process))}</span>${isPinned(process) ? icon('pin', 'pinned') : ''}<span class="port">:${list[0]}${more}</span>
     </button>
-    <button class="stop" data-action="stop" data-id="${esc(process.identity)}" aria-label="${esc(stopQuestion(process, false).slice(0, -1))}" title="Stop · ⌥ Force quit" ${stopping ? 'disabled' : ''}>${icon('stop')}</button>
+    <button class="stop" data-action="stop" data-id="${esc(process.identity)}" aria-label="${esc(stopQuestion(process, false).slice(0, -1))}" title="${WORDS.stopHint}" ${stopping ? 'disabled' : ''}>${icon(WINDOWS ? 'close' : 'stop')}</button>
   </div>`;
 }
 
@@ -138,7 +144,7 @@ function listView(): string {
   const idle = visible.filter(isIdle).sort((a, b) => (b.memoryBytes ?? 0) - (a.memoryBytes ?? 0));
   const section = (name: string, list: PortProcess[], action = ''): string => list.length
     ? `<section aria-label="${name}"><div class="section-head"><span>${name}</span>${action}</div>${list.map(row).join('')}</section>` : '';
-  const stopAll = `<button class="pill ${pendingIdle ? 'armed' : ''}" data-action="stop-idle" ${stopping || pendingIdle ? 'disabled' : ''}>Stop all</button>`;
+  const stopAll = `<button class="pill ${pendingIdle ? 'armed' : ''}" data-action="stop-idle" ${stopping || pendingIdle ? 'disabled' : ''}>${WORDS.stopAll}</button>`;
   const body = loading
     ? Array.from({length: 4}, () => `<div class="row skeleton" aria-hidden="true"><span class="icon"></span><i></i></div>`).join('')
     : visible.length ? section('Running', running) + section('Idle', idle, stopAll)
@@ -150,7 +156,7 @@ function listView(): string {
 
 function bars(): string {
   if (error) return `<div class="bar error" role="alert">${esc(error)}</div>`;
-  if (pendingIdle) return `<div class="bar" role="alertdialog" aria-label="Confirm stop all idle">${confirmBox(`Stop ${pendingIdle.length} idle app${pendingIdle.length === 1 ? '' : 's'}?`, false, 'confirm-idle')}</div>`;
+  if (pendingIdle) return `<div class="bar" role="alertdialog" aria-label="Confirm stop all idle">${confirmBox(`${WORDS.stop} ${pendingIdle.length} idle app${pendingIdle.length === 1 ? '' : 's'}?`, false, 'confirm-idle', WINDOWS ? WORDS.stopAll : WORDS.stopButton)}</div>`;
   if (notice) return `<div class="bar notice" role="status">${icon('check', 'ok')}<span>${esc(notice)}</span></div>`;
   return '';
 }
@@ -165,7 +171,7 @@ function detailView(process: PortProcess): string {
   const property = (key: string, value: string, hint = ''): string => `<div class="prop"><dt>${key}</dt><dd ${hint ? `title="${esc(hint)}"` : ''}>${esc(value)}</dd></div>`;
   const action = pending?.process.identity === process.identity
     ? `<div class="confirm" role="alertdialog" aria-label="Confirm stop">${confirmBox(stopQuestion(process, pending.force), pending.force, 'confirm')}</div>`
-    : `<button class="danger wide" data-action="stop" data-id="${esc(process.identity)}" title="⌥ Force quit" ${stopping ? 'disabled' : ''}>Stop</button>`;
+    : `<button class="danger wide" data-action="stop" data-id="${esc(process.identity)}" title="${WORDS.stopHint}" ${stopping ? 'disabled' : ''}>${WORDS.stopButton}</button>`;
   return `<header class="header">${round('back', 'Back', 'data-action="back"')}${processIcon(process, 'large')}<h1>${esc(isOwn(process) ? 'PortKiller' : title(process))}</h1>${round('pin', pinned ? 'Unpin' : 'Pin', `data-action="pin" data-id="${esc(process.identity)}" aria-pressed="${pinned}" ${settingsSaving ? 'disabled' : ''}`, pinned ? 'on' : '')}</header>
     <dl class="detail">${portRows}${property('App', process.app)}${property('CPU', percent(idle ? 0 : process.cpuPercent), '100% is one core, as in Activity Monitor')}${property('Memory', bytes(process.memoryBytes))}${idle ? property('Idle', duration(process.idleSeconds ?? 0)) : property('Uptime', duration(Date.now() / 1000 - process.startedAt))}${property('Folder', folder, command)}</dl>
     ${error ? bars() : `<div class="actions">${action}</div>`}`;
@@ -174,7 +180,10 @@ function detailView(process: PortProcess): string {
 function settingsView(): string {
   const busy = settingsSaving ? 'disabled' : '';
   const options = IDLE_CHOICES.map(minutes => `<option value="${minutes}" ${settings.idleMinutes === minutes ? 'selected' : ''}>${minutes < 60 ? `${minutes} min` : `${minutes / 60} hour${minutes === 60 ? '' : 's'}`}</option>`).join('');
-  const appearance = (['auto', 'light', 'dark'] as const).map(value => `<button data-action="appearance" data-value="${value}" aria-pressed="${settings.appearance === value}" ${busy}>${value[0].toUpperCase()}${value.slice(1)}</button>`).join('');
+  // A segmented control on macOS; a drop-down, as in Windows Settings, on Windows.
+  const appearance = WINDOWS
+    ? `<select data-appearance aria-label="Appearance" ${busy}>${(['auto', 'light', 'dark'] as const).map(value => `<option value="${value}" ${settings.appearance === value ? 'selected' : ''}>${value === 'auto' ? 'System' : `${value[0].toUpperCase()}${value.slice(1)}`}</option>`).join('')}</select>`
+    : `<div class="segmented" role="group" aria-label="Appearance">${(['auto', 'light', 'dark'] as const).map(value => `<button data-action="appearance" data-value="${value}" aria-pressed="${settings.appearance === value}" ${busy}>${value[0].toUpperCase()}${value.slice(1)}</button>`).join('')}</div>`;
   const pins = settings.pinned.map((key, index) => {
     const [executable, project] = [key.slice(0, key.lastIndexOf('|')), key.slice(key.lastIndexOf('|') + 1)];
     const running = processes.find(process => pinKey(process) === key);
@@ -183,13 +192,13 @@ function settingsView(): string {
   }).join('');
   return `<header class="header">${round('back', 'Back', 'data-action="back"')}<h1>Settings</h1></header>
     <div class="settings">
-      <label class="setting"><span>Open at login</span><input type="checkbox" role="switch" class="switch" data-login ${settings.launchAtLogin ? 'checked' : ''} ${busy}></label>
-      <label class="setting"><span>Count in menu bar</span><input type="checkbox" role="switch" class="switch" data-count ${settings.showCount ? 'checked' : ''} ${busy}></label>
+      <label class="setting"><span>${WORDS.login}</span><input type="checkbox" role="switch" class="switch" data-login ${settings.launchAtLogin ? 'checked' : ''} ${busy}></label>
+      ${WINDOWS ? '' : `<label class="setting"><span>Count in menu bar</span><input type="checkbox" role="switch" class="switch" data-count ${settings.showCount ? 'checked' : ''} ${busy}></label>`}
       <label class="setting"><span>Idle after</span><select data-idle ${busy}>${options}</select></label>
-      <div class="setting"><span>Appearance</span><div class="segmented" role="group" aria-label="Appearance">${appearance}</div></div>
+      <div class="setting"><span>Appearance</span>${appearance}</div>
       ${pins ? `<section class="pins" aria-label="Pinned"><div class="section-head"><span>Pinned</span></div>${pins}</section>` : ''}
     </div>
-    ${error ? bars() : ''}<div class="actions"><button class="chip wide" data-action="quit">Quit PortKiller</button></div>`;
+    ${error ? bars() : ''}<div class="actions"><button class="chip wide" data-action="quit">${WORDS.quit}</button></div>`;
 }
 
 function render(): void {
@@ -242,6 +251,8 @@ function bindInputs(): void {
   if (login) login.onchange = () => { void saveSettings({...settings, launchAtLogin: login.checked}); };
   const count = app.querySelector<HTMLInputElement>('[data-count]');
   if (count) count.onchange = () => { void saveSettings({...settings, showCount: count.checked}); };
+  const appearance = app.querySelector<HTMLSelectElement>('[data-appearance]');
+  if (appearance) appearance.onchange = () => { void saveSettings({...settings, appearance: appearance.value as Settings['appearance']}); };
   const idle = app.querySelector<HTMLSelectElement>('[data-idle]');
   if (idle) idle.onchange = () => { void saveSettings({...settings, idleMinutes: Number(idle.value)}); };
 }
@@ -262,7 +273,7 @@ app.addEventListener('click', event => {
       break;
     case 'stop':
       if (!process) return;
-      pending = { process: structuredClone(process), force: (event as MouseEvent).altKey };
+      pending = { process: structuredClone(process), force: !WINDOWS && (event as MouseEvent).altKey };
       pendingIdle = null; error = ''; notice = ''; render();
       app.querySelector<HTMLButtonElement>('[data-action="confirm"]')?.focus();
       break;
@@ -341,7 +352,8 @@ async function stopPending(): Promise<void> {
   stopping = true; clearTimeout(timer); render();
   try {
     const result = await backend.stop(target.process, target.force);
-    flash(result.stopped ? `${target.force ? 'Force quit' : 'Stopped'} ${title(target.process)}` : `${title(target.process)} is still stopping. ⌥-click Stop to force quit.`);
+    flash(result.stopped ? `${target.force ? 'Force quit' : WORDS.stopped} ${title(target.process)}`
+      : WINDOWS ? `${title(target.process)} is still ending.` : `${title(target.process)} is still stopping. ⌥-click Stop to force quit.`);
     pending = null;
     if (view.kind === 'detail' && result.stopped) view = { kind: 'list' };
   } catch (reason) { error = String(reason); pending = null; }
@@ -362,8 +374,8 @@ async function stopIdle(): Promise<void> {
     } catch (reason) { failures.push(`${title(process)}: ${String(reason)}`); }
   }
   pendingIdle = null; stopping = false;
-  if (failures.length) error = `Stopped ${stopped} of ${targets.length}. ${failures[0]}${failures.length > 1 ? ` (+${failures.length - 1} more)` : ''}`;
-  else flash(`Stopped ${stopped} app${stopped === 1 ? '' : 's'}`);
+  if (failures.length) error = `${WORDS.stopped} ${stopped} of ${targets.length}. ${failures[0]}${failures.length > 1 ? ` (+${failures.length - 1} more)` : ''}`;
+  else flash(`${WORDS.stopped} ${stopped} app${stopped === 1 ? '' : 's'}`);
   render();
   await refresh();
 }
