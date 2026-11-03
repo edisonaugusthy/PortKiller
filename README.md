@@ -25,9 +25,9 @@ A small, open-source menu bar and tray app for macOS and Windows.
 | Platform | Download |
 | --- | --- |
 | Windows 10 and 11 | [PortKiller-Windows-Setup.exe](https://github.com/edisonaugusthy/PortKiller/releases/latest/download/PortKiller-Windows-Setup.exe) |
-| macOS 14.5 and later | Coming once the app is signed and notarized. Until then, [build it from source](#build-from-source). |
+| macOS 14.5 and later | Coming soon |
 
-Both links always point at the newest release. PortKiller updates itself: when a new version is out, the list shows **Update**.
+The download always points at the newest release. PortKiller updates itself: when a new version is out, the list shows **Update**.
 
 ## What it does
 
@@ -94,7 +94,7 @@ Everything that differs between macOS and Windows sits in `src-tauri/src/platfor
 1. Set the version in `package.json`, `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, then commit and push.
 2. Run **Actions › Release › Run workflow**. It builds the Windows installer, signs the update and publishes the release with `latest.json`, which installed apps use to offer the update.
 
-The workflow needs the `TAURI_SIGNING_PRIVATE_KEY` secret (from `npm run tauri signer generate`). The macOS job is ready in the workflow but commented out until an Apple Developer ID is available.
+The workflow needs the `TAURI_SIGNING_PRIVATE_KEY` secret (from `npm run tauri signer generate`).
 
 ## Limits
 
