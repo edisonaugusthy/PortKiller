@@ -1,6 +1,6 @@
 {
   "name": "portkiller",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "See which apps hold your ports, and stop them safely. A menu bar and tray app for macOS and Windows.",
   "license": "MIT",
   "repository": {
