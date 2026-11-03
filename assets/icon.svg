@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4a5cf0"/><stop offset="1" stop-color="#151a4c"/></linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".28"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/></linearGradient>
+    <linearGradient id="plate" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".96"/><stop offset="1" stop-color="#d9dfff" stop-opacity=".82"/></linearGradient>
+    <linearGradient id="badge" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff6d60"/><stop offset="1" stop-color="#dc231a"/></linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#sheen)"/>
+  <rect x="262" y="290" width="500" height="500" rx="128" fill="#000" opacity=".22"/>
+  <rect x="262" y="262" width="500" height="500" rx="128" fill="url(#plate)"/>
+  <rect x="265" y="265" width="494" height="494" rx="125" fill="none" stroke="#fff" stroke-opacity=".8" stroke-width="6"/>
+  <rect x="398" y="404" width="66" height="204" rx="33" fill="#1a2060"/>
+  <rect x="560" y="404" width="66" height="204" rx="33" fill="#1a2060"/>
+  <circle cx="742" cy="760" r="134" fill="#000" opacity=".22"/>
+  <circle cx="742" cy="742" r="134" fill="url(#badge)"/>
+  <circle cx="742" cy="742" r="128" fill="none" stroke="#fff" stroke-opacity=".45" stroke-width="8"/>
+  <rect x="694" y="694" width="96" height="96" rx="21" fill="#fff"/>
+</svg>
