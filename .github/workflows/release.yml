@@ -1,8 +1,9 @@
 name: Release
 
-# Run by hand: Actions › Release › Run workflow.
-# Publishes "PortKiller <version>" as a GitHub Release, using the version in src-tauri/tauri.conf.json,
-# with installers, signed update packages and latest.json, which the apps read to offer updates.
+# Run by hand: Actions › Release › Run workflow, and enter the new version (for example 0.2.0).
+# It sets that version in the code, commits it to main, and publishes "PortKiller <version>" as a
+# GitHub Release with the installer, the signed update package and latest.json. Installed apps read
+# latest.json and offer the update. Leave the version empty to release the version already in the code.
 #
 # Website download links always point at the newest release:
 #   Windows: https://github.com/edisonaugusthy/PortKiller/releases/latest/download/PortKiller-Windows-Setup.exe
@@ -14,6 +15,11 @@ name: Release
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: New version, for example 0.2.0 (empty keeps the current one)
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -27,6 +33,18 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      # Recorded as a commit by whoever started the release.
+      - name: Set the version
+        if: inputs.version != ''
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          node scripts/set-version.mjs "$VERSION"
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
+          git commit -am "Release v$VERSION"
+          git push origin HEAD:main
       - uses: dtolnay/rust-toolchain@stable
       - run: npm ci
       - id: build
@@ -58,9 +76,12 @@ jobs:
   # APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_PASSWORD (app-specific password) and APPLE_TEAM_ID.
   #
   # macos:
+  #   needs: windows                # builds the version commit that the Windows job pushed
   #   runs-on: macos-latest
   #   steps:
   #     - uses: actions/checkout@v4
+  #       with:
+  #         ref: main
   #     - uses: actions/setup-node@v4
   #       with:
   #         node-version: 22
