@@ -43,6 +43,9 @@ export function demoBackend(): Backend {
   return {
     // Like the native scanner, CPU is unknown until a second sample exists.
     scan: async () => {
+      // ?loading keeps the first scan pending; ?error makes every scan fail.
+      if (params.has('loading')) await new Promise(() => {});
+      if (params.has('error')) throw new Error('lsof exited with status 1');
       scans++;
       processes = processes.map(process => {
         const base = seeds.get(process.identity)?.[6] ?? (process.idleSeconds ? 0 : 0.8);

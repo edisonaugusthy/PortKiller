@@ -1,9 +1,9 @@
-import { createElement, Search, Settings2, CircleStop, ChevronLeft, Pin, Copy, Check, X } from 'lucide';
+import { createElement, Search, Settings as Gear, Square, ArrowUpRight, ArrowLeft, ChevronLeft, Pin, Copy, Check, X, CircleAlert } from 'lucide';
 import { createBackend } from './backend';
 import type { Backend, PortProcess, ProcessDetails, Settings } from './types';
 import './style.css';
 
-const icons = { search: Search, settings: Settings2, stop: CircleStop, back: ChevronLeft, pin: Pin, copy: Copy, check: Check, close: X };
+const icons = { search: Search, settings: Gear, stop: Square, go: ArrowUpRight, back: ChevronLeft, backWin: ArrowLeft, pin: Pin, copy: Copy, check: Check, close: X, alert: CircleAlert };
 /** The app's own mark, the same socket as the menu bar glyph. */
 const SOCKET = '<svg class="socket" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4.5"/><path d="M9.5 9.5v5M14.5 9.5v5"/></svg>';
 type IconName = keyof typeof icons;
@@ -12,16 +12,20 @@ const esc = (value: string | number): string => String(value).replace(/[&<>"']/g
 const app = document.querySelector<HTMLElement>('#app')!;
 
 const IDLE_CHOICES = [15, 30, 60, 180, 720];
-/** Windows gets its own look and words; it has one End task action and no menu bar count. */
+/** Windows gets its own look, words and shortcuts; it has one End task action and no menu bar count. */
 const WINDOWS = navigator.userAgent.includes('Windows') || (import.meta.env.DEV && new URLSearchParams(location.search).has('windows'));
 if (WINDOWS) document.documentElement.dataset.platform = 'windows';
 const WORDS = WINDOWS
   ? { stop: 'End', stopButton: 'End task', stopAll: 'End all', stopping: 'Ending…', stopped: 'Ended', stopHint: 'End task', login: 'Start with Windows', quit: 'Exit PortKiller' }
-  : { stop: 'Stop', stopButton: 'Stop', stopAll: 'Stop all', stopping: 'Stopping…', stopped: 'Stopped', stopHint: 'Stop · ⌥ Force quit', login: 'Open at login', quit: 'Quit PortKiller' };
+  : { stop: 'Stop', stopButton: 'Stop', stopAll: 'Stop all', stopping: 'Stopping…', stopped: 'Stopped', stopHint: 'Stop · Option-click to force quit', login: 'Open at login', quit: 'Quit PortKiller' };
+/** Shortcut labels for the right-click menu. The handlers are in the keydown listener below. */
+const KEYS = WINDOWS
+  ? { open: 'Ctrl+O', copy: 'Ctrl+C', pin: 'Ctrl+P', stop: 'Del', force: '' }
+  : { open: '⌘O', copy: '⌘C', pin: '⌘P', stop: '⌘⌫', force: '⌥⌘⌫' };
 /** The port of the server this page comes from (the dev server in `tauri dev`). Stopping it closes PortKiller. */
 const OWN_PORT = location.protocol.startsWith('http') && location.port ? Number(location.port) : null;
 /** Ports that are not web pages, so they get Copy but no Open. */
-const NOT_WEB = new Set([5432, 3306, 6379, 27017, 9229, 9222, 11211]);
+const NOT_WEB = new Set([5432, 3306, 6379, 27017, 9229, 9222, 11211, 5672]);
 /** Glyphs for command-line servers, which have no app icon of their own. */
 const GLYPHS: [RegExp, string, string][] = [
   [/^next/, 'N', '#18181b'], [/^vite/, 'V', '#7c5cff'], [/^(node|bun|deno)/, 'JS', '#3c873a'],
@@ -37,9 +41,14 @@ let processes: PortProcess[] = [];
 let view: View = { kind: 'list' };
 let pending: { process: PortProcess; force: boolean } | null = null;
 let pendingIdle: PortProcess[] | null = null;
+/** The row picked with the arrow keys; shortcuts act on it. */
+let selected: string | null = null;
+/** The open right-click menu: its row and where it was opened, relative to the panel. */
+let menu: { identity: string; x: number; y: number } | null = null;
 let query = '';
 let settings: Settings = { showCount: true, launchAtLogin: false, idleMinutes: 30, pinned: [], appearance: 'auto' };
 let error = '';
+let scanError = '';
 let notice = '';
 let copiedPort: number | null = null;
 let available: string | null = null;
@@ -65,20 +74,13 @@ function portList(process: PortProcess): string {
   const list = ports(process).map(port => `:${port}`);
   return list.length > 1 ? `${list.slice(0, -1).join(', ')} and ${list.at(-1)}` : list.join('');
 }
+function webPort(process: PortProcess): number | undefined { return ports(process).find(port => !NOT_WEB.has(port)); }
 function title(process: PortProcess): string { return process.project && process.project !== 'local' ? process.project : process.app; }
-function percent(value: number | null): string { return value === null ? '–' : value < 0.05 ? '0%' : `${value.toFixed(1)}%`; }
+function displayName(process: PortProcess): string { return isOwn(process) ? 'PortKiller' : title(process); }
 function bytes(value: number | null): string {
   if (value === null) return '–';
   const mb = value / 1048576;
   return mb >= 1000 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.max(1, Math.round(mb))} MB`;
-}
-function duration(seconds: number): string {
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 1) return 'now';
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return minutes % 60 && hours < 10 ? `${hours}h ${minutes % 60}m` : `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
 }
 function shortPath(path: string): string { return path.replace(/^\/Users\/[^/]+/, '~'); }
 
@@ -99,6 +101,18 @@ function matches(process: PortProcess, needle: string): boolean {
   return [process.app, process.name, process.project, process.pid, ...ports(process).map(port => `:${port}`)].join(' ').toLowerCase().includes(needle);
 }
 function find(identity: string): PortProcess | undefined { return processes.find(process => process.identity === identity); }
+
+/** Pinned first, then Running (PortKiller's own server last), then Idle by memory. */
+function sections(): { name: string; list: PortProcess[] }[] {
+  const needle = query.trim().toLowerCase();
+  const visible = processes.filter(process => matches(process, needle));
+  const pinned = visible.filter(process => isPinned(process) && !isOwn(process)).sort((a, b) => ports(a)[0] - ports(b)[0]);
+  const running = visible.filter(process => !isIdle(process) && (!isPinned(process) || isOwn(process)))
+    .sort((a, b) => Number(isOwn(a)) - Number(isOwn(b)) || ports(a)[0] - ports(b)[0]);
+  const idle = visible.filter(isIdle).sort((a, b) => (b.memoryBytes ?? 0) - (a.memoryBytes ?? 0));
+  return [{ name: 'Pinned', list: pinned }, { name: 'Running', list: running }, { name: 'Idle', list: idle }].filter(section => section.list.length);
+}
+function visibleOrder(): PortProcess[] { return sections().flatMap(section => section.list); }
 
 // Rendering
 
@@ -126,41 +140,63 @@ function confirmBox(question: string, force: boolean, action: string, label = WO
 
 function row(process: PortProcess): string {
   const list = ports(process);
+  const id = esc(process.identity);
   if (pending?.process.identity === process.identity) {
     return `<div class="row"><div class="confirm" role="alertdialog" aria-label="Confirm stop">${processIcon(process)}${confirmBox(stopQuestion(process, pending.force), pending.force, 'confirm')}</div></div>`;
   }
   const doomed = pendingIdle?.some(item => item.identity === process.identity);
   const more = list.length > 1 ? `<span class="more" title="${esc(list.slice(1).map(port => `:${port}`).join(', '))}">+${list.length - 1}</span>` : '';
-  return `<div class="row ${isIdle(process) ? 'idle' : ''} ${doomed ? 'doomed' : ''}">
-    <button class="open" data-action="open" data-id="${esc(process.identity)}" aria-label="${esc(`${title(process)}, port ${list[0]}`)}">
-      ${processIcon(process)}<span class="name">${esc(isOwn(process) ? 'PortKiller' : title(process))}</span>${isPinned(process) ? icon('pin', 'pinned') : ''}<span class="port">:${list[0]}${more}</span>
+  const web = webPort(process);
+  const open = web === undefined ? '' : `<button class="act go" data-action="open-port" data-port="${web}" aria-label="Open localhost:${web} in browser" title="Open in browser">${icon('go')}</button>`;
+  const classes = ['row', isIdle(process) && 'idle', doomed && 'doomed', selected === process.identity && 'selected', menu?.identity === process.identity && 'menu-open'].filter(Boolean).join(' ');
+  return `<div class="${classes}" data-row="${id}">
+    <button class="open" data-action="open" data-id="${id}" aria-label="${esc(`${displayName(process)}, port ${list[0]}`)}">
+      ${processIcon(process)}<span class="name">${esc(displayName(process))}</span><span class="port">:${list[0]}${more}</span>
     </button>
-    <button class="stop" data-action="stop" data-id="${esc(process.identity)}" aria-label="${esc(stopQuestion(process, false).slice(0, -1))}" title="${WORDS.stopHint}" ${stopping ? 'disabled' : ''}>${icon(WINDOWS ? 'close' : 'stop')}</button>
+    <span class="acts">${open}<button class="act stop" data-action="stop" data-id="${id}" aria-label="${esc(stopQuestion(process, false).slice(0, -1))}" title="${WORDS.stopHint}" ${stopping ? 'disabled' : ''}>${icon(WINDOWS ? 'close' : 'stop')}</button></span>
   </div>`;
 }
 
+function contextMenu(): string {
+  const process = menu && find(menu.identity);
+  if (!menu || !process) return '';
+  const id = esc(process.identity);
+  const web = webPort(process);
+  const item = (label: string, keys: string, attributes: string): string =>
+    `<button role="menuitem" ${attributes}><span>${esc(label)}</span>${keys ? `<kbd>${keys}</kbd>` : ''}</button>`;
+  return `<div class="menu" role="menu" aria-label="${esc(`Actions for ${displayName(process)}`)}" style="left:${menu.x}px;top:${menu.y}px">
+    ${web === undefined ? '' : item('Open in browser', KEYS.open, `data-action="open-port" data-port="${web}"`)}
+    ${item('Copy address', KEYS.copy, `data-action="copy" data-port="${ports(process)[0]}"`)}
+    ${isOwn(process) ? '' : item(isPinned(process) ? 'Unpin' : 'Pin', KEYS.pin, `data-action="pin" data-id="${id}"`)}
+    <div class="separator" role="separator"></div>
+    ${item(WORDS.stopButton, KEYS.stop, `data-action="stop" data-id="${id}"`)}
+    ${WINDOWS ? '' : item('Force quit', KEYS.force, `data-action="force" data-id="${id}"`)}
+  </div>`;
+}
+
+function message(kind: 'alert' | 'search' | 'check', heading: string, line: string, button = ''): string {
+  return `<div class="message" data-kind="${kind}" role="${kind === 'alert' ? 'alert' : 'status'}"><span class="badge">${icon(kind)}</span><strong>${esc(heading)}</strong><span>${esc(line)}</span>${button}</div>`;
+}
+
 function listView(): string {
-  const needle = query.trim().toLowerCase();
-  const visible = processes.filter(process => matches(process, needle));
-  const running = visible.filter(process => !isIdle(process)).sort((a, b) => Number(isOwn(a)) - Number(isOwn(b)) || Number(isPinned(b)) - Number(isPinned(a)) || ports(a)[0] - ports(b)[0]);
-  const idle = visible.filter(isIdle).sort((a, b) => (b.memoryBytes ?? 0) - (a.memoryBytes ?? 0));
-  const section = (name: string, list: PortProcess[], action = ''): string => list.length
-    ? `<section aria-label="${name}"><div class="section-head"><span>${name}</span>${action}</div>${list.map(row).join('')}</section>` : '';
+  const groups = sections();
   const stopAll = `<button class="pill ${pendingIdle ? 'armed' : ''}" data-action="stop-idle" ${stopping || pendingIdle ? 'disabled' : ''}>${WORDS.stopAll}</button>`;
   const body = loading
-    ? Array.from({length: 4}, () => `<div class="row skeleton" aria-hidden="true"><span class="icon"></span><i></i></div>`).join('')
-    : visible.length ? section('Running', running) + section('Idle', idle, stopAll)
-    : query ? `<p class="empty">No results</p>`
-    : error ? '' : `<div class="empty">${SOCKET}<span>No open ports</span></div>`;
-  return `<div class="top"><label class="search">${icon('search')}<input id="search" aria-label="Search" placeholder="Search" value="${esc(query)}" autocomplete="off" spellcheck="false"></label>${round('settings', 'Settings', 'data-action="settings"')}</div>
-    <div class="list">${body}</div>${bars()}`;
+    ? `<div class="skeletons" aria-busy="true" aria-label="Loading">${['45%', '30%', '55%', '38%'].map(width => `<div class="row skeleton" aria-hidden="true"><span class="icon"></span><i style="width:${width}"></i><b></b></div>`).join('')}</div>`
+    : groups.length ? groups.map(({ name, list }) => `<section aria-label="${name}"><div class="section-head"><span>${name}</span>${name === 'Idle' ? stopAll : ''}</div>${list.map(row).join('')}</section>`).join('')
+    : scanError && !processes.length ? message('alert', 'Couldn’t read open ports', 'The scan stopped before it finished.', `<button class="chip" data-action="retry" title="${esc(scanError)}">Try again</button>`)
+    : query ? message('search', `No apps match “${query.trim()}”`, 'Search by app, folder or port.', '<button class="chip" data-action="clear">Clear search</button>')
+    : error ? '' : message('check', 'All ports are free', 'Start a server and it shows up here.');
+  const gear = round('settings', available ? 'Settings, update available' : 'Settings', 'data-action="settings"', available ? 'dot' : '');
+  return `<div class="top"><label class="search">${icon('search')}<input id="search" aria-label="Search" placeholder="Search" value="${esc(query)}" autocomplete="off" spellcheck="false"></label>${gear}</div>
+    <div class="list">${body}</div>${bars()}${contextMenu()}`;
 }
 
 function bars(): string {
   if (error) return `<div class="bar error" role="alert">${esc(error)}</div>`;
+  if (scanError && processes.length) return `<div class="bar error" role="alert"><span title="${esc(scanError)}">Couldn’t read open ports</span><button class="text-button" data-action="retry">Try again</button></div>`;
   if (pendingIdle) return `<div class="bar" role="alertdialog" aria-label="Confirm stop all idle">${confirmBox(`${WORDS.stop} ${pendingIdle.length} idle app${pendingIdle.length === 1 ? '' : 's'}?`, false, 'confirm-idle', WINDOWS ? WORDS.stopAll : WORDS.stopButton)}</div>`;
   if (notice) return `<div class="bar notice" role="status">${icon('check', 'ok')}<span>${esc(notice)}</span></div>`;
-  if (available) return `<div class="bar notice" role="status"><span>Version ${esc(available)} is available</span><button class="accent" data-action="update" ${updating ? 'disabled' : ''}>${updating ? 'Updating…' : 'Update'}</button></div>`;
   return '';
 }
 
@@ -169,14 +205,14 @@ function detailView(process: PortProcess): string {
   const folder = info === undefined || info === 'loading' ? '…' : info === 'error' || !info.cwd ? '–' : shortPath(info.cwd);
   const command = info && typeof info === 'object' ? info.command : '';
   const pinned = isPinned(process);
-  const idle = isIdle(process);
-  const portRows = ports(process).map(port => `<div class="port-row"><dt>:${port}</dt><dd>${NOT_WEB.has(port) ? '' : `<button class="chip" data-action="open-port" data-port="${port}">Open</button>`}${round(copiedPort === port ? 'check' : 'copy', `Copy localhost:${port}`, `data-action="copy" data-port="${port}"`, 'quiet')}</dd></div>`).join('');
+  const portRows = ports(process).map(port => `<div class="port-row"><dt>:${port}</dt><dd>${NOT_WEB.has(port) ? '' : `<button class="chip go" data-action="open-port" data-port="${port}">Open</button>`}${round(copiedPort === port ? 'check' : 'copy', `Copy localhost:${port}`, `data-action="copy" data-port="${port}"`, 'quiet')}</dd></div>`).join('');
   const property = (key: string, value: string, hint = ''): string => `<div class="prop"><dt>${key}</dt><dd ${hint ? `title="${esc(hint)}"` : ''}>${esc(value)}</dd></div>`;
   const action = pending?.process.identity === process.identity
     ? `<div class="confirm" role="alertdialog" aria-label="Confirm stop">${confirmBox(stopQuestion(process, pending.force), pending.force, 'confirm')}</div>`
     : `<button class="danger wide" data-action="stop" data-id="${esc(process.identity)}" title="${WORDS.stopHint}" ${stopping ? 'disabled' : ''}>${WORDS.stopButton}</button>`;
-  return `<header class="header">${round('back', 'Back', 'data-action="back"')}${processIcon(process, 'large')}<h1>${esc(isOwn(process) ? 'PortKiller' : title(process))}</h1>${round('pin', pinned ? 'Unpin' : 'Pin', `data-action="pin" data-id="${esc(process.identity)}" aria-pressed="${pinned}" ${settingsSaving ? 'disabled' : ''}`, pinned ? 'on' : '')}</header>
-    <dl class="detail">${portRows}${property('App', process.app)}${property('CPU', percent(idle ? 0 : process.cpuPercent), '100% is one core, as in Activity Monitor')}${property('Memory', bytes(process.memoryBytes))}${idle ? property('Idle', duration(process.idleSeconds ?? 0)) : property('Uptime', duration(Date.now() / 1000 - process.startedAt))}${property('Folder', folder, command)}</dl>
+  const pin = isOwn(process) ? '' : round('pin', pinned ? 'Unpin' : 'Pin', `data-action="pin" data-id="${esc(process.identity)}" aria-pressed="${pinned}" ${settingsSaving ? 'disabled' : ''}`, pinned ? 'on' : '');
+  return `<header class="header">${round(WINDOWS ? 'backWin' : 'back', 'Back', 'data-action="back"')}${processIcon(process, 'large')}<h1>${esc(displayName(process))}</h1>${pin}</header>
+    <dl class="detail">${portRows}${property('Memory', bytes(process.memoryBytes))}${property('Folder', folder, command)}</dl>
     ${error ? bars() : `<div class="actions">${action}</div>`}`;
 }
 
@@ -187,19 +223,15 @@ function settingsView(): string {
   const appearance = WINDOWS
     ? `<select data-appearance aria-label="Appearance" ${busy}>${(['auto', 'light', 'dark'] as const).map(value => `<option value="${value}" ${settings.appearance === value ? 'selected' : ''}>${value === 'auto' ? 'System' : `${value[0].toUpperCase()}${value.slice(1)}`}</option>`).join('')}</select>`
     : `<div class="segmented" role="group" aria-label="Appearance">${(['auto', 'light', 'dark'] as const).map(value => `<button data-action="appearance" data-value="${value}" aria-pressed="${settings.appearance === value}" ${busy}>${value[0].toUpperCase()}${value.slice(1)}</button>`).join('')}</div>`;
-  const pins = settings.pinned.map((key, index) => {
-    const [executable, project] = [key.slice(0, key.lastIndexOf('|')), key.slice(key.lastIndexOf('|') + 1)];
-    const running = processes.find(process => pinKey(process) === key);
-    const name = running ? title(running) : project && project !== 'local' ? project : executable.split('/').pop() ?? key;
-    return `<div class="pin-row">${appIcon(running?.app ?? name, running?.bundle ?? null)}<span class="name">${esc(name)}</span>${round('close', `Unpin ${name}`, `data-action="unpin" data-index="${index}" ${busy}`, 'quiet')}</div>`;
-  }).join('');
-  return `<header class="header">${round('back', 'Back', 'data-action="back"')}<h1>Settings</h1></header>
+  const update = available
+    ? `<div class="update" role="status"><i aria-hidden="true"></i><span>Version ${esc(available)}</span><button class="accent" data-action="update" ${updating ? 'disabled' : ''}>${updating ? 'Updating…' : 'Update'}</button></div>` : '';
+  return `<header class="header">${round(WINDOWS ? 'backWin' : 'back', 'Back', 'data-action="back"')}<h1>Settings</h1></header>
+    ${update}
     <div class="settings">
       <label class="setting"><span>${WORDS.login}</span><input type="checkbox" role="switch" class="switch" data-login ${settings.launchAtLogin ? 'checked' : ''} ${busy}></label>
       ${WINDOWS ? '' : `<label class="setting"><span>Count in menu bar</span><input type="checkbox" role="switch" class="switch" data-count ${settings.showCount ? 'checked' : ''} ${busy}></label>`}
       <label class="setting"><span>Idle after</span><select data-idle ${busy}>${options}</select></label>
       <div class="setting"><span>Appearance</span>${appearance}</div>
-      ${pins ? `<section class="pins" aria-label="Pinned"><div class="section-head"><span>Pinned</span></div>${pins}</section>` : ''}
     </div>
     ${error ? bars() : ''}<div class="actions"><button class="chip wide" data-action="quit">${WORDS.quit}</button></div>`;
 }
@@ -207,6 +239,8 @@ function settingsView(): string {
 function render(): void {
   if (disposed) return;
   if (view.kind === 'detail' && !find(view.identity)) { view = { kind: 'list' }; pending = null; }
+  if (selected && !find(selected)) selected = null;
+  if (menu && (!find(menu.identity) || view.kind !== 'list')) menu = null;
   const content = view.kind === 'settings' ? settingsView() : view.kind === 'detail' ? detailView(find(view.identity)!) : listView();
   const html = `<section class="panel" aria-label="PortKiller">${content}</section>`;
   // Most scans change nothing the list shows, so the DOM is left alone.
@@ -215,13 +249,17 @@ function render(): void {
   const focused = document.activeElement as HTMLElement | null;
   const editing = focused instanceof HTMLInputElement && focused.id === 'search';
   const caret = editing ? focused.selectionStart : null;
-  const focusKey = !editing && focused?.dataset.action ? `[data-action="${focused.dataset.action}"]${focused.dataset.id ? `[data-id="${CSS.escape(focused.dataset.id)}"]` : ''}${focused.dataset.port ? `[data-port="${focused.dataset.port}"]` : ''}` : '';
+  const inMenu = !!focused?.closest('.menu');
+  const focusKey = !editing && !inMenu && focused?.dataset.action ? `[data-action="${focused.dataset.action}"]${focused.dataset.id ? `[data-id="${CSS.escape(focused.dataset.id)}"]` : ''}${focused.dataset.port ? `[data-port="${focused.dataset.port}"]` : ''}` : '';
   const scrollTop = app.querySelector('.list, .detail, .settings')?.scrollTop ?? 0;
   app.innerHTML = html;
   bindInputs();
   const scroller = app.querySelector<HTMLElement>('.list, .detail, .settings');
   if (scroller) scroller.scrollTop = scrollTop;
-  if (editing) {
+  placeMenu();
+  if (inMenu && menu) {
+    app.querySelector<HTMLElement>('.menu [role="menuitem"]')?.focus();
+  } else if (editing) {
     const input = document.querySelector<HTMLInputElement>('#search');
     input?.focus();
     if (caret !== null) input?.setSelectionRange(caret, caret);
@@ -234,12 +272,24 @@ function scheduleRender(): void {
   scheduledRender = true;
   requestAnimationFrame(() => { scheduledRender = false; render(); });
 }
+/** Keeps the menu inside the panel: flips it above the pointer or left of it when it would overflow. */
+function placeMenu(): void {
+  const element = app.querySelector<HTMLElement>('.menu');
+  const panel = app.querySelector<HTMLElement>('.panel');
+  if (!element || !panel || !menu) return;
+  // A short list grows the window so the whole menu shows.
+  panel.style.minHeight = `${menu.y + element.offsetHeight + 8}px`;
+  const room = panel.getBoundingClientRect();
+  const box = element.getBoundingClientRect();
+  if (box.bottom > room.bottom - 4) element.style.top = `${Math.max(4, menu.y - box.height)}px`;
+  if (box.right > room.right - 4) element.style.left = `${Math.max(4, room.width - box.width - 4)}px`;
+}
 function focusSearch(): void { document.querySelector<HTMLInputElement>('#search')?.focus(); }
 function flash(message: string): void {
   notice = message; clearTimeout(noticeTimer);
   noticeTimer = setTimeout(() => { notice = ''; scheduleRender(); }, 4000);
 }
-function go(next: View): void { view = next; pending = null; pendingIdle = null; error = ''; render(); }
+function go(next: View): void { view = next; pending = null; pendingIdle = null; menu = null; error = ''; render(); }
 function applyAppearance(): void {
   if (settings.appearance === 'auto') delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = settings.appearance;
@@ -249,7 +299,7 @@ function applyAppearance(): void {
 
 function bindInputs(): void {
   const search = app.querySelector<HTMLInputElement>('#search');
-  if (search) search.oninput = () => { query = search.value; pendingIdle = null; render(); };
+  if (search) search.oninput = () => { query = search.value; pendingIdle = null; selected = null; render(); };
   const login = app.querySelector<HTMLInputElement>('[data-login]');
   if (login) login.onchange = () => { void saveSettings({...settings, launchAtLogin: login.checked}); };
   const count = app.querySelector<HTMLInputElement>('[data-count]');
@@ -260,26 +310,45 @@ function bindInputs(): void {
   if (idle) idle.onchange = () => { void saveSettings({...settings, idleMinutes: Number(idle.value)}); };
 }
 
+function openDetail(process: PortProcess): void {
+  selected = process.identity;
+  go({ kind: 'detail', identity: process.identity });
+  void loadDetails(process);
+}
+function askStop(process: PortProcess, force: boolean): void {
+  pending = { process: structuredClone(process), force: !WINDOWS && force };
+  pendingIdle = null; menu = null; error = ''; notice = ''; render();
+  app.querySelector<HTMLButtonElement>('[data-action="confirm"]')?.focus();
+}
+function openPort(port: number): void { void backend.openPort(port).catch(reason => { error = String(reason); render(); }); }
+function openMenu(process: PortProcess, x: number, y: number): void {
+  selected = process.identity; pending = null; pendingIdle = null;
+  menu = { identity: process.identity, x: Math.round(x), y: Math.round(y) };
+  render();
+  app.querySelector<HTMLElement>('.menu [role="menuitem"]')?.focus();
+}
+function closeMenu(): void {
+  if (!menu) return;
+  const identity = menu.identity;
+  menu = null; render();
+  app.querySelector<HTMLElement>(`[data-action="open"][data-id="${CSS.escape(identity)}"]`)?.focus();
+}
+
 app.addEventListener('click', event => {
   const target = (event.target as Element).closest<HTMLElement>('[data-action]');
+  // Like a native menu, a click outside the menu only dismisses it.
+  if (menu && !(event.target as Element).closest('.menu')) { closeMenu(); return; }
   if (!target || (target as HTMLButtonElement).disabled) return;
+  menu = null;
   const process = target.dataset.id ? find(target.dataset.id) : undefined;
   const port = Number(target.dataset.port);
   switch (target.dataset.action) {
     case 'settings': go({ kind: 'settings' }); break;
     case 'back': go({ kind: 'list' }); break;
     case 'quit': void backend.quit().catch(reason => { error = String(reason); render(); }); break;
-    case 'open':
-      if (!process) return;
-      go({ kind: 'detail', identity: process.identity });
-      void loadDetails(process);
-      break;
-    case 'stop':
-      if (!process) return;
-      pending = { process: structuredClone(process), force: !WINDOWS && (event as MouseEvent).altKey };
-      pendingIdle = null; error = ''; notice = ''; render();
-      app.querySelector<HTMLButtonElement>('[data-action="confirm"]')?.focus();
-      break;
+    case 'open': if (process) openDetail(process); break;
+    case 'stop': if (process) askStop(process, (event as MouseEvent).altKey); break;
+    case 'force': if (process) askStop(process, true); break;
     case 'stop-idle':
       // Only the idle apps the current search shows.
       pendingIdle = structuredClone(processes.filter(process => isIdle(process) && matches(process, query.trim().toLowerCase())));
@@ -289,13 +358,29 @@ app.addEventListener('click', event => {
     case 'cancel': pending = null; pendingIdle = null; render(); break;
     case 'confirm': void stopPending(); break;
     case 'confirm-idle': void stopIdle(); break;
-    case 'pin': if (process) void togglePin(process); break;
-    case 'unpin': void saveSettings({...settings, pinned: settings.pinned.filter((_, index) => index !== Number(target.dataset.index))}); break;
+    case 'pin': if (process) void togglePin(process); else render(); break;
     case 'appearance': void saveSettings({...settings, appearance: target.dataset.value as Settings['appearance']}); break;
-    case 'open-port': void backend.openPort(port).catch(reason => { error = String(reason); render(); }); break;
+    case 'open-port': openPort(port); render(); break;
     case 'copy': void copy(port); break;
     case 'update': void installUpdate(); break;
+    case 'retry': scanError = ''; loading = true; render(); void refresh(); break;
+    case 'clear': query = ''; render(); focusSearch(); break;
   }
+});
+
+app.addEventListener('contextmenu', event => {
+  const rowElement = (event.target as Element).closest<HTMLElement>('[data-row]');
+  const process = rowElement && find(rowElement.dataset.row!);
+  const panel = app.querySelector<HTMLElement>('.panel');
+  if (!process || !panel || pending || pendingIdle || stopping) return;
+  const room = panel.getBoundingClientRect();
+  openMenu(process, event.clientX - room.left, event.clientY - room.top);
+});
+app.addEventListener('focusin', event => {
+  // Tabbing onto a row selects it, so the shortcuts act on what has focus.
+  // Keyboard focus only: re-rendering during a click would swallow the click.
+  const open = (event.target as Element).closest<HTMLElement>('.open[data-id]');
+  if (open && open.matches(':focus-visible') && selected !== open.dataset.id) { selected = open.dataset.id!; render(); }
 });
 
 async function copy(port: number): Promise<void> {
@@ -306,8 +391,12 @@ async function copy(port: number): Promise<void> {
     const field = Object.assign(document.createElement('textarea'), { value: text });
     document.body.append(field); field.select(); document.execCommand('copy'); field.remove();
   }
-  copiedPort = port; render();
-  setTimeout(() => { if (copiedPort === port) { copiedPort = null; scheduleRender(); } }, 1500);
+  if (view.kind === 'detail') {
+    copiedPort = port; render();
+    setTimeout(() => { if (copiedPort === port) { copiedPort = null; scheduleRender(); } }, 1500);
+  } else {
+    flash(`Copied ${text}`); render();
+  }
 }
 
 async function checkUpdate(): Promise<void> {
@@ -354,8 +443,8 @@ async function refresh(): Promise<void> {
     scans++;
     const live = new Set(processes.map(process => process.identity));
     for (const id of details.keys()) if (!live.has(id)) details.delete(id);
-    if (error.startsWith('Scan failed')) error = '';
-  } catch (reason) { error = `Scan failed: ${String(reason)}`; }
+    scanError = '';
+  } catch (reason) { scanError = String(reason); }
   finally {
     loading = false; scanning = false;
     scheduleRender();
@@ -406,25 +495,90 @@ async function saveSettings(next: Settings): Promise<void> {
   finally { settingsSaving = false; render(); }
 }
 
+// Keyboard: ↑↓ select, ↩ details, and on the selected app (or the open details page)
+// ⌘O / Ctrl+O open, ⌘C / Ctrl+C copy, ⌘P / Ctrl+P pin, ⌘⌫ / Del stop, ⌥⌘⌫ force quit,
+// Shift+F10 or the menu key for the right-click menu.
+
+function moveSelection(step: number): void {
+  const order = visibleOrder();
+  if (!order.length) return;
+  const index = order.findIndex(process => process.identity === selected);
+  const next = index < 0 ? (step > 0 ? 0 : order.length - 1) : index + step;
+  if (next < 0) { selected = null; render(); focusSearch(); return; }
+  selected = order[Math.min(next, order.length - 1)].identity;
+  render();
+  const button = app.querySelector<HTMLElement>(`[data-action="open"][data-id="${CSS.escape(selected)}"]`);
+  button?.focus();
+  button?.scrollIntoView({ block: 'nearest' });
+}
+
+function menuKeys(event: KeyboardEvent): void {
+  const items = [...app.querySelectorAll<HTMLElement>('.menu [role="menuitem"]')];
+  const index = items.indexOf(document.activeElement as HTMLElement);
+  if (event.key === 'Escape' || event.key === 'Tab') { event.preventDefault(); closeMenu(); }
+  else if (event.key === 'ArrowDown') { event.preventDefault(); items[(index + 1) % items.length]?.focus(); }
+  else if (event.key === 'ArrowUp') { event.preventDefault(); items[(index - 1 + items.length) % items.length]?.focus(); }
+}
+
 document.addEventListener('keydown', event => {
-  const inSearch = document.activeElement instanceof HTMLInputElement && document.activeElement.id === 'search';
+  if (menu) { menuKeys(event); return; }
+  const search = document.activeElement instanceof HTMLInputElement && document.activeElement.id === 'search' ? document.activeElement : null;
+  const command = WINDOWS ? event.ctrlKey : event.metaKey;
+  const key = event.key.toLowerCase();
+  const confirming = !!(pending || pendingIdle);
   if (event.key === 'Escape') {
     event.preventDefault();
-    if ((pending || pendingIdle) && !stopping) { pending = null; pendingIdle = null; render(); }
+    if (confirming && !stopping) { pending = null; pendingIdle = null; render(); }
     else if (view.kind !== 'list') go({ kind: 'list' });
-    else if (query) { query = ''; render(); focusSearch(); }
+    else if (query) { query = ''; selected = null; render(); focusSearch(); }
+    else if (selected) { selected = null; render(); focusSearch(); }
     else void backend?.close();
-  } else if ((event.metaKey || event.ctrlKey) && event.key === 'f') {
+    return;
+  }
+  if (command && key === 'f') {
     event.preventDefault();
     if (view.kind !== 'list') go({ kind: 'list' });
     focusSearch();
-  } else if (view.kind === 'list' && !inSearch && !pending && !pendingIdle && event.key.length === 1 && event.key !== ' ' && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    return;
+  }
+  if (confirming) return;
+  if (view.kind === 'list' && (event.key === 'ArrowDown' || event.key === 'ArrowUp') && !command && !event.altKey) {
+    event.preventDefault();
+    moveSelection(event.key === 'ArrowDown' ? 1 : -1);
+    return;
+  }
+  const target = view.kind === 'detail' ? find(view.identity) : view.kind === 'list' && selected ? find(selected) : undefined;
+  // In the search field, editing keys keep their usual meaning while it has text.
+  const editingText = !!search && (search.value !== '' || (search.selectionStart ?? 0) !== (search.selectionEnd ?? 0));
+  if (target) {
+    if (search && event.key === 'Enter') { event.preventDefault(); openDetail(target); return; }
+    if (command && key === 'o') { event.preventDefault(); const port = webPort(target); if (port !== undefined) openPort(port); return; }
+    if (command && key === 'c' && !editingText) { event.preventDefault(); void copy(ports(target)[0]); return; }
+    if (command && key === 'p') { event.preventDefault(); if (!isOwn(target)) void togglePin(target); return; }
+    const stopKey = WINDOWS ? event.key === 'Delete' && !search : command && event.key === 'Backspace' && !editingText;
+    if (stopKey) { event.preventDefault(); askStop(target, event.altKey); return; }
+    if (view.kind === 'list' && (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))) {
+      event.preventDefault();
+      const element = app.querySelector<HTMLElement>(`[data-row="${CSS.escape(target.identity)}"]`);
+      const panel = app.querySelector<HTMLElement>('.panel');
+      if (element && panel) {
+        const box = element.getBoundingClientRect(), room = panel.getBoundingClientRect();
+        openMenu(target, box.left - room.left + 48, box.bottom - room.top - 4);
+      }
+      return;
+    }
+  }
+  // WebView2 prints on Ctrl+P and opens files on Ctrl+O; neither belongs in a tray menu.
+  if (command && (key === 'p' || key === 'o')) { event.preventDefault(); return; }
+  if (view.kind === 'list' && !search && event.key.length === 1 && event.key !== ' ' && !event.metaKey && !event.ctrlKey && !event.altKey) {
     // Typing anywhere in the list starts a search, like a native menu's type-select.
+    selected = null;
     focusSearch();
   }
 });
 document.addEventListener('visibilitychange', () => { clearTimeout(timer); if (!document.hidden && backend) void refresh(); });
 window.addEventListener('pagehide', () => { disposed = true; clearTimeout(timer); clearTimeout(noticeTimer); });
+// The WebView's own menu (Reload, Inspect) never shows; rows open PortKiller's menu instead.
 document.addEventListener('contextmenu', event => event.preventDefault());
 
 let lastHeight = 0;

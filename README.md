@@ -27,17 +27,19 @@ A small, open-source menu bar and tray app for macOS and Windows.
 | Windows 10 and 11 | [PortKiller-Windows-Setup.exe](https://github.com/edisonaugusthy/PortKiller/releases/latest/download/PortKiller-Windows-Setup.exe) |
 | macOS 14.5 and later | Coming soon |
 
-The download always points at the newest release. PortKiller updates itself: when a new version is out, the list shows **Update**.
+The download always points at the newest release. PortKiller updates itself: when a new version is out, a dot appears on the settings gear and **Update** is at the top of settings.
 
 ## What it does
 
 - **Every listening app at a glance.** One row per app: its icon, its name (the project folder when there is one, so two Node servers read as `storefront` and `api`) and its port. `+2` means it listens on more ports.
-- **Running and Idle.** Apps with no noticeable CPU for 30 minutes (configurable) move to Idle, largest first, with **Stop all** to free them in one go. Pin the ones you never want stopped.
-- **One click for details.** Every port with Open and Copy, plus the app, CPU, memory, uptime and folder.
+- **Pinned, Running and Idle.** Pinned apps stay at the top. Apps with no noticeable CPU for 30 minutes (configurable) move to Idle, largest first, with **Stop all** to free them in one go.
+- **Open or stop from the list.** Hover or select a row for **Open in browser** and **Stop**. Right-click a row for Open, Copy address, Pin, Stop and Force quit.
+- **Keyboard first.** ↑ ↓ select, ↩ details, ⌘O open, ⌘C copy, ⌘P pin, ⌘⌫ stop, ⌥⌘⌫ force quit, ⌘F search, Esc back. On Windows: Ctrl+O, Ctrl+C, Ctrl+P, Del, Ctrl+F, and Shift+F10 for the menu.
+- **One click for details.** Every port with Open and Copy, plus memory and folder.
 - **Stop with confidence.** Confirmations name every port that will be freed. On macOS, Stop asks the app to quit and Option-click forces it; on Windows, End task ends it.
 - **Search anything.** Start typing or press ⌘F / Ctrl+F to filter by port, app, project or PID.
 - **Looks native.** Liquid Glass on macOS 26, Acrylic on Windows 11, light and dark, and solid colors when transparency is reduced.
-- **Light on resources.** No dock icon and no background timers. The window is created when you open it and destroyed when you close it. About 17 KB of JavaScript.
+- **Light on resources.** No dock icon and no background timers. The window is created when you open it and destroyed when you close it. About 23 KB of JavaScript.
 
 ## Safety
 
@@ -66,7 +68,7 @@ npm run tauri dev      # run the app from source
 npm run tauri build    # build PortKiller.app or the Windows installer
 ```
 
-To work on the interface in a browser with sample processes, run `npm run dev` and open `http://127.0.0.1:1420/?demo`. Add `&windows` for the Windows look, `&theme=dark`, `&dense` for a long list, `&empty`, or `&update` to show the update notice. The demo is removed from release builds.
+To work on the interface in a browser with sample processes, run `npm run dev` and open `http://127.0.0.1:1420/?demo`. Add `&windows` for the Windows look, `&theme=dark`, `&dense` for a long list, `&empty`, `&loading`, `&error` for a failed scan, or `&update` to show the update dot. The demo is removed from release builds.
 
 Checks (CI runs the same on macOS and Windows):
 
