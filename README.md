@@ -25,9 +25,11 @@ A small, open-source menu bar and tray app for macOS and Windows.
 | Platform | Download |
 | --- | --- |
 | Windows 10 and 11 | [PortKiller-Windows-Setup.exe](https://github.com/edisonaugusthy/PortKiller/releases/latest/download/PortKiller-Windows-Setup.exe) |
-| macOS 14.5 and later | Coming soon |
+| macOS 14.5 and later | [PortKiller-macOS.dmg](https://github.com/edisonaugusthy/PortKiller/releases/latest/download/PortKiller-macOS.dmg) |
 
 The download always points at the newest release. PortKiller updates itself: when a new version is out, a dot appears on the settings gear and **Update** is at the top of settings.
+
+PortKiller isn't signed by Apple or Microsoft, so the first launch takes one extra step. On macOS, open it once, then choose **Open Anyway** in **System Settings › Privacy & Security**. On Windows, choose **More info › Run anyway**.
 
 ## What it does
 
@@ -93,9 +95,9 @@ Everything that differs between macOS and Windows sits in `src-tauri/src/platfor
 
 ## Releasing
 
-Run **Actions › Release › Run workflow** and enter the new version, for example `0.2.0`. The workflow sets that version in the code and commits it, builds and signs the installer and the update, and publishes the release with `latest.json`. Installed apps then show **Update** the next time the menu is opened (they check at most every six hours). Locally, `node scripts/set-version.mjs 0.2.0` sets the version the same way.
+Run **Actions › Release › Run workflow** and enter the new version, for example `0.2.0`. The workflow sets that version in the code and commits it, builds and signs the Windows and macOS installers and updates, and publishes the release with `latest.json`. Installed apps then show **Update** the next time the menu is opened (they check at most every six hours). Locally, `node scripts/set-version.mjs 0.2.0` sets the version the same way.
 
-The workflow needs the `TAURI_SIGNING_PRIVATE_KEY` secret (from `npm run tauri signer generate`).
+The workflow needs the `TAURI_SIGNING_PRIVATE_KEY` secret (from `npm run tauri signer generate`), plus `MACOS_CERTIFICATE` and `MACOS_CERTIFICATE_PASSWORD` for the self-signed macOS certificate.
 
 ## Limits
 

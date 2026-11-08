@@ -1,17 +1,20 @@
 name: Release
 
 # Run by hand: Actions › Release › Run workflow, and enter the new version (for example 0.2.0).
-# It sets that version in the code, commits it to main, and publishes "PortKiller <version>" as a
-# GitHub Release with the installer, the signed update package and latest.json. Installed apps read
-# latest.json and offer the update. Leave the version empty to release the version already in the code.
+# It sets that version in the code, commits it to main, builds Windows and macOS into a draft, and
+# publishes "PortKiller <version>" as a GitHub Release once both succeed, with the installers, the signed
+# update packages and latest.json. Installed apps read latest.json and offer the update. Leave the
+# version empty to release the version already in the code.
 #
 # Website download links always point at the newest release:
 #   Windows: https://github.com/edisonaugusthy/PortKiller/releases/latest/download/PortKiller-Windows-Setup.exe
-#   macOS:   https://github.com/edisonaugusthy/PortKiller/releases/latest/download/PortKiller-macOS.dmg  (once the macOS job is enabled)
+#   macOS:   https://github.com/edisonaugusthy/PortKiller/releases/latest/download/PortKiller-macOS.dmg
 #
 # Repository secrets:
 #   TAURI_SIGNING_PRIVATE_KEY           contents of ~/.tauri/portkiller-updater.key (signs update packages)
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  its password; leave unset if it has none
+#   MACOS_CERTIFICATE                   base64 of the self-signed code-signing .p12
+#   MACOS_CERTIFICATE_PASSWORD          its password
 
 on:
   workflow_dispatch:
@@ -57,7 +60,8 @@ jobs:
           tagName: v__VERSION__
           releaseName: PortKiller __VERSION__
           releaseBody: Download PortKiller for your computer below. The app offers this update automatically.
-          releaseDraft: false
+          releaseDraft: true
+          releaseCommitish: main
           prerelease: false
           includeUpdaterJson: true
           args: --bundles nsis --config src-tauri/tauri.release.conf.json
@@ -70,48 +74,76 @@ jobs:
           cp src-tauri/target/release/bundle/nsis/*-setup.exe PortKiller-Windows-Setup.exe
           gh release upload "v${{ steps.build.outputs.appVersion }}" PortKiller-Windows-Setup.exe --clobber
 
-  # macOS: enable once there is an Apple Developer ID certificate. Unsigned macOS apps are blocked by
-  # Gatekeeper, so the DMG is not published until it can be signed and notarized.
-  # Extra repository secrets: APPLE_CERTIFICATE (base64 .p12), APPLE_CERTIFICATE_PASSWORD,
-  # APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_PASSWORD (app-specific password) and APPLE_TEAM_ID.
-  #
-  # macos:
-  #   needs: windows                # builds the version commit that the Windows job pushed
-  #   runs-on: macos-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #       with:
-  #         ref: main
-  #     - uses: actions/setup-node@v4
-  #       with:
-  #         node-version: 22
-  #         cache: npm
-  #     - uses: dtolnay/rust-toolchain@stable
-  #       with:
-  #         targets: aarch64-apple-darwin,x86_64-apple-darwin
-  #     - run: npm ci
-  #     - id: build
-  #       uses: tauri-apps/tauri-action@v0
-  #       env:
-  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  #         TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-  #         TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-  #         APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-  #         APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-  #         APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-  #         APPLE_ID: ${{ secrets.APPLE_ID }}
-  #         APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-  #         APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-  #       with:
-  #         tagName: v__VERSION__
-  #         releaseName: PortKiller __VERSION__
-  #         releaseDraft: false
-  #         includeUpdaterJson: true
-  #         # One app for Apple silicon and Intel Macs.
-  #         args: --target universal-apple-darwin --bundles app,dmg --config src-tauri/tauri.release.conf.json
-  #     - name: Add the website download
-  #       env:
-  #         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  #       run: |
-  #         cp src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg PortKiller-macOS.dmg
-  #         gh release upload "v${{ steps.build.outputs.appVersion }}" PortKiller-macOS.dmg --clobber
+  # Self-signed, because there is no Apple Developer ID: macOS asks people to confirm once on first open.
+  # The same certificate gives every version the same identity. Updates are verified by the update key.
+  macos:
+    needs: windows # builds the version commit that the Windows job pushed
+    runs-on: macos-latest
+    outputs:
+      version: ${{ steps.build.outputs.appVersion }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - run: npm ci
+      - name: Load the signing certificate
+        id: certificate
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password="$(uuidgen)"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          rm "$RUNNER_TEMP/certificate.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity="$(security find-identity -p codesigning "$keychain" | awk '/PortKiller Code Signing/ { print $2; exit }')"
+          test -n "$identity"
+          echo "identity=$identity" >> "$GITHUB_OUTPUT"
+      - id: build
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ steps.certificate.outputs.identity }}
+        with:
+          tagName: v__VERSION__
+          releaseName: PortKiller __VERSION__
+          releaseDraft: true
+          releaseCommitish: main
+          includeUpdaterJson: true
+          # One app for Apple silicon and Intel Macs.
+          args: --target universal-apple-darwin --bundles app,dmg --config src-tauri/tauri.release.conf.json
+      # A fixed file name, so the website's link always gets the newest DMG.
+      - name: Check the signature and add the website download
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bundle=src-tauri/target/universal-apple-darwin/release/bundle
+          codesign --verify --deep --strict "$bundle/macos/PortKiller.app"
+          codesign -dvv "$bundle/macos/PortKiller.app" 2>&1 | grep -q "Authority=PortKiller Code Signing"
+          cp "$bundle"/dmg/*.dmg PortKiller-macOS.dmg
+          gh release upload "v${{ steps.build.outputs.appVersion }}" PortKiller-macOS.dmg --clobber
+
+  # Installed apps only see the release once every platform is in it.
+  publish:
+    needs: macos
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.macos.outputs.version }}
+        run: gh release edit "v$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --latest
