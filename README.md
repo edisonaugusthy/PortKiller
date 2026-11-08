@@ -97,7 +97,7 @@ Everything that differs between macOS and Windows sits in `src-tauri/src/platfor
 
 Run **Actions › Release › Run workflow** and enter the new version, for example `0.2.0`. The workflow sets that version in the code and commits it, builds and signs the Windows and macOS installers and updates, and publishes the release with `latest.json`. Installed apps then show **Update** the next time the menu is opened (they check at most every six hours). Locally, `node scripts/set-version.mjs 0.2.0` sets the version the same way.
 
-The workflow needs the `TAURI_SIGNING_PRIVATE_KEY` secret (from `npm run tauri signer generate`), plus `MACOS_CERTIFICATE` and `MACOS_CERTIFICATE_PASSWORD` for the self-signed macOS certificate.
+The workflow needs the `TAURI_SIGNING_PRIVATE_KEY` secret (from `npm run tauri signer generate`).
 
 ## Limits
 

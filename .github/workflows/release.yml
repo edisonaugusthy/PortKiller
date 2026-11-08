@@ -13,8 +13,6 @@ name: Release
 # Repository secrets:
 #   TAURI_SIGNING_PRIVATE_KEY           contents of ~/.tauri/portkiller-updater.key (signs update packages)
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  its password; leave unset if it has none
-#   MACOS_CERTIFICATE                   base64 of the self-signed code-signing .p12
-#   MACOS_CERTIFICATE_PASSWORD          its password
 
 on:
   workflow_dispatch:
@@ -74,8 +72,8 @@ jobs:
           cp src-tauri/target/release/bundle/nsis/*-setup.exe PortKiller-Windows-Setup.exe
           gh release upload "v${{ steps.build.outputs.appVersion }}" PortKiller-Windows-Setup.exe --clobber
 
-  # Self-signed, because there is no Apple Developer ID: macOS asks people to confirm once on first open.
-  # The same certificate gives every version the same identity. Updates are verified by the update key.
+  # Ad-hoc signed (signingIdentity "-" in tauri.conf.json), because there is no Apple Developer ID: macOS
+  # asks people to confirm once on first open. Updates are verified by the update key.
   macos:
     needs: windows # builds the version commit that the Windows job pushed
     runs-on: macos-latest
@@ -93,32 +91,12 @@ jobs:
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
       - run: npm ci
-      - name: Load the signing certificate
-        id: certificate
-        env:
-          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
-          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-        run: |
-          keychain="$RUNNER_TEMP/signing.keychain-db"
-          keychain_password="$(uuidgen)"
-          security create-keychain -p "$keychain_password" "$keychain"
-          security set-keychain-settings -lut 21600 "$keychain"
-          security unlock-keychain -p "$keychain_password" "$keychain"
-          echo "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
-          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
-          rm "$RUNNER_TEMP/certificate.p12"
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" > /dev/null
-          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
-          identity="$(security find-identity -p codesigning "$keychain" | awk '/PortKiller Code Signing/ { print $2; exit }')"
-          test -n "$identity"
-          echo "identity=$identity" >> "$GITHUB_OUTPUT"
       - id: build
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ steps.certificate.outputs.identity }}
         with:
           tagName: v__VERSION__
           releaseName: PortKiller __VERSION__
@@ -134,7 +112,7 @@ jobs:
         run: |
           bundle=src-tauri/target/universal-apple-darwin/release/bundle
           codesign --verify --deep --strict "$bundle/macos/PortKiller.app"
-          codesign -dvv "$bundle/macos/PortKiller.app" 2>&1 | grep -q "Authority=PortKiller Code Signing"
+          codesign -dvv "$bundle/macos/PortKiller.app" 2>&1 | grep -q "Signature=adhoc"
           cp "$bundle"/dmg/*.dmg PortKiller-macOS.dmg
           gh release upload "v${{ steps.build.outputs.appVersion }}" PortKiller-macOS.dmg --clobber
 
