@@ -1,3 +1,5 @@
+@AGENTS.md
+
 # PortKiller
 
 ## Commits and pull requests
