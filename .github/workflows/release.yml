@@ -4,7 +4,9 @@ name: Release
 # It sets that version in the code, commits it to main, builds Windows and macOS into a draft, and
 # publishes "PortKiller <version>" as a GitHub Release once both succeed, with the installers, the signed
 # update packages and latest.json. Installed apps read latest.json and offer the update. Leave the
-# version empty to release the version already in the code.
+# version empty to release the version already in the code. Untick "publish" to stop at the draft,
+# for example to notarize the Mac app before anyone can download or update to it; publish the draft
+# afterwards with: gh release edit v<version> --draft=false --latest
 #
 # Website download links always point at the newest release:
 #   Windows: https://github.com/edisonaugusthy/PortKiller/releases/latest/download/PortKiller-Windows-Setup.exe
@@ -21,6 +23,11 @@ on:
         description: New version, for example 0.2.0 (empty keeps the current one)
         required: false
         type: string
+      publish:
+        description: Publish when both builds succeed (untick to stop at the draft)
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -119,6 +126,7 @@ jobs:
   # Installed apps only see the release once every platform is in it.
   publish:
     needs: macos
+    if: inputs.publish
     runs-on: ubuntu-latest
     steps:
       - env:
