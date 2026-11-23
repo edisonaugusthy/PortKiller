@@ -19,6 +19,8 @@ export interface PortProcess {
   listeners: Listener[];
   /** The enclosing `.app` bundle, if any; its icon is shown in the list. */
   bundle: string | null;
+  /** The short Docker container ID when the row is a container, which Stop stops on its own. */
+  container: string | null;
 }
 
 export interface ProcessDetails {

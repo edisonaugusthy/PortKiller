@@ -1,6 +1,6 @@
 //! Everything that differs between operating systems, behind one small set of functions:
-//! `listeners`, `identity`, `resources`, `read_details`, `signal`, `icon_source`, `icon_png`
-//! and `open_url`. The rest of PortKiller is shared.
+//! `listeners`, `identity`, `resources`, `read_details`, `signal`, `icon_source`, `icon_png`,
+//! `open_url`, `docker_connect` and `attach_console`. The rest of PortKiller is shared.
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]

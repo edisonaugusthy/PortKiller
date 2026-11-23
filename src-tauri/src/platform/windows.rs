@@ -8,6 +8,7 @@ use std::{
     path::Path,
     process::{Command, Stdio},
     sync::OnceLock,
+    time::Duration,
 };
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, Signal, System, Uid, UpdateKind};
 
@@ -208,6 +209,49 @@ pub fn open_url(url: &str) -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("Could not open the browser: {e}"))
+}
+
+/// The Docker engine's named pipe: `DOCKER_HOST`, then Docker Desktop's pipes.
+/// Reads are bounded by the caller, which gives up on the request after `timeout`.
+pub fn docker_connect(_timeout: Duration) -> Result<std::fs::File, String> {
+    let configured = std::env::var("DOCKER_HOST").ok().and_then(|host| {
+        host.strip_prefix("npipe://")
+            .map(|pipe| pipe.replace('/', "\\"))
+    });
+    let pipes = configured.into_iter().chain([
+        r"\\.\pipe\docker_engine".to_string(),
+        r"\\.\pipe\dockerDesktopLinuxEngine".to_string(),
+    ]);
+    for pipe in pipes {
+        if let Ok(file) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&pipe)
+        {
+            return Ok(file);
+        }
+    }
+    Err("Docker is not running".into())
+}
+
+/// Release builds are GUI programs with no console of their own. When run from a terminal,
+/// borrow that terminal's console so `portkiller list` prints there. Pipes (an MCP client)
+/// are left as they are.
+pub fn attach_console() {
+    const STD_OUTPUT_HANDLE: u32 = -11_i32 as u32;
+    const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetStdHandle(handle: u32) -> isize;
+        fn AttachConsole(process: u32) -> i32;
+    }
+    // Both calls take plain integers and only change this process's console attachment.
+    unsafe {
+        let output = GetStdHandle(STD_OUTPUT_HANDLE);
+        if output == 0 || output == -1 {
+            AttachConsole(ATTACH_PARENT_PROCESS);
+        }
+    }
 }
 
 #[cfg(test)]

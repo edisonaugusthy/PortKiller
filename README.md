@@ -39,6 +39,7 @@ PortKiller isn't signed by Apple or Microsoft, so the first launch takes one ext
 - **Keyboard first.** ↑ ↓ select, ↩ details, ⌘O open, ⌘C copy, ⌘P pin, ⌘⌫ stop, ⌥⌘⌫ force quit, ⌘F search, Esc back. On Windows: Ctrl+O, Ctrl+C, Ctrl+P, Del, Ctrl+F, and Shift+F10 for the menu.
 - **One click for details.** Every port with Open and Copy, plus memory and folder.
 - **Stop with confidence.** Confirmations name every port that will be freed. On macOS, Stop asks the app to quit and Option-click forces it; on Windows, End task ends it.
+- **Docker containers, one by one.** Ports published by Docker containers show as one row per container (`storefront/db`, `minio`), not one Docker row. Stop runs `docker stop` on that container only; Docker and your other containers keep running. Works with Docker Desktop, OrbStack, Colima and Rancher Desktop.
 - **Search anything.** Start typing or press ⌘F / Ctrl+F to filter by port, app, project or PID.
 - **Looks native.** Liquid Glass on macOS 26, Acrylic on Windows 11, light and dark, and solid colors when transparency is reduced.
 - **Light on resources.** No dock icon and no background timers. The window is created when you open it and destroyed when you close it. About 23 KB of JavaScript.
@@ -53,6 +54,31 @@ All process inspection and stopping happens in Rust; the interface cannot run co
 - is not a system process or PortKiller itself.
 
 If anything changed, the stop is refused and you review it again. No `sudo`, admin rights or helper tools are used.
+
+A Docker container is stopped through the Docker engine's own socket, and only if it is still running with exactly the ports you confirmed. The Docker engine itself is never stopped from a container row.
+
+## Command line and agents
+
+The app is also a command: `/Applications/PortKiller.app/Contents/MacOS/portkiller` on macOS and `portkiller.exe` in the install folder on Windows. To type just `portkiller` on macOS:
+
+```sh
+ln -s /Applications/PortKiller.app/Contents/MacOS/portkiller /usr/local/bin/portkiller
+```
+
+```sh
+portkiller list            # PORTS, NAME, APP, PID; add --json for scripts
+portkiller free 3000       # stop whatever listens on :3000
+```
+
+`free` makes the same checks as the menu. If the app also listens on ports you did not name (a Node server on `:3000` with its debugger on `:9229`), a terminal asks first and a script gets exit code 2 with the exact command to run: `portkiller free 3000 9229`. System services, other users' apps and PortKiller itself are never stopped.
+
+Coding agents can use it as an MCP server with two tools, `list_ports` and `stop_port`, instead of `kill -9`:
+
+```sh
+claude mcp add portkiller -- /Applications/PortKiller.app/Contents/MacOS/portkiller mcp
+```
+
+Other clients take the same command with the argument `mcp`, for example `{"mcpServers": {"portkiller": {"command": "/Applications/PortKiller.app/Contents/MacOS/portkiller", "args": ["mcp"]}}}`.
 
 ## Privacy
 
@@ -85,13 +111,15 @@ cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings &
 src/                     Interface: one TypeScript file, one stylesheet, no framework
 src-tauri/src/
   scanner.rs             Shared: grouping, CPU and idle tracking, stop validation
+  docker.rs              Shared: one row per Docker container, docker stop
+  cli.rs, mcp.rs         Shared: the portkiller command and its MCP server
   ports.rs               Tray, window, settings, updates and the commands the interface calls
   platform/macos.rs      lsof, libproc, signals, app icons from macOS
   platform/windows.rs    TCP table, process info, End task
 .github/workflows/       CI on macOS and Windows; the manual Release workflow
 ```
 
-Everything that differs between macOS and Windows sits in `src-tauri/src/platform/` behind the same eight functions, so the rest of the app is shared. Measurements and test notes are in [`docs/verification.md`](docs/verification.md).
+Everything that differs between macOS and Windows sits in `src-tauri/src/platform/` behind the same ten functions, so the rest of the app is shared. Measurements and test notes are in [`docs/verification.md`](docs/verification.md).
 
 ## Releasing
 
@@ -101,7 +129,7 @@ The workflow needs the `TAURI_SIGNING_PRIVATE_KEY` secret (from `npm run tauri s
 
 ## Limits
 
-PortKiller shows TCP servers, not outgoing connections or UDP. For containers and virtual machines it manages the host-side proxy process, not services inside the guest. Process managers may restart what you stop.
+PortKiller shows TCP servers, not outgoing connections or UDP. Docker containers get their own rows; other virtual machines show their host-side proxy process. Containers show no memory and never count as idle. Process managers and Docker restart policies may restart what you stop.
 
 ## Contributing
 

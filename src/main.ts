@@ -212,7 +212,7 @@ function detailView(process: PortProcess): string {
     : `<button class="danger wide" data-action="stop" data-id="${esc(process.identity)}" title="${WORDS.stopHint}" ${stopping ? 'disabled' : ''}>${WORDS.stopButton}</button>`;
   const pin = isOwn(process) ? '' : round('pin', pinned ? 'Unpin' : 'Pin', `data-action="pin" data-id="${esc(process.identity)}" aria-pressed="${pinned}" ${settingsSaving ? 'disabled' : ''}`, pinned ? 'on' : '');
   return `<header class="header">${round(WINDOWS ? 'backWin' : 'back', 'Back', 'data-action="back"')}${processIcon(process, 'large')}<h1>${esc(displayName(process))}</h1>${pin}</header>
-    <dl class="detail">${portRows}${property('Memory', bytes(process.memoryBytes))}${property('Folder', folder, command)}</dl>
+    <dl class="detail">${portRows}${process.memoryBytes === null ? '' : property('Memory', bytes(process.memoryBytes))}${property('Folder', folder, command)}</dl>
     ${error ? bars() : `<div class="actions">${action}</div>`}`;
 }
 

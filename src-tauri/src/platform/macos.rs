@@ -314,6 +314,34 @@ pub fn open_url(url: &str) -> Result<(), String> {
         .map_err(|e| format!("Could not open the browser: {e}"))
 }
 
+/// The Docker engine's socket: `DOCKER_HOST`, Docker Desktop, then OrbStack, Colima and Rancher Desktop.
+pub fn docker_connect(timeout: Duration) -> Result<std::os::unix::net::UnixStream, String> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let configured = std::env::var("DOCKER_HOST")
+        .ok()
+        .and_then(|host| host.strip_prefix("unix://").map(str::to_string));
+    let sockets = configured.into_iter().chain([
+        format!("{home}/.docker/run/docker.sock"),
+        "/var/run/docker.sock".into(),
+        format!("{home}/.orbstack/run/docker.sock"),
+        format!("{home}/.colima/default/docker.sock"),
+        format!("{home}/.rd/docker.sock"),
+    ]);
+    for socket in sockets {
+        if let Ok(stream) = std::os::unix::net::UnixStream::connect(&socket) {
+            stream
+                .set_read_timeout(Some(timeout))
+                .and_then(|_| stream.set_write_timeout(Some(timeout)))
+                .map_err(|e| e.to_string())?;
+            return Ok(stream);
+        }
+    }
+    Err("Docker is not running".into())
+}
+
+/// Command-line output already goes to the terminal on macOS.
+pub fn attach_console() {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

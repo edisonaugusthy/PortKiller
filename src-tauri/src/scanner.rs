@@ -1,4 +1,4 @@
-use crate::platform;
+use crate::{docker, platform};
 use serde::Serialize;
 use std::{
     collections::{BTreeSet, HashMap},
@@ -33,6 +33,8 @@ pub struct PortProcess {
     pub listeners: Vec<Listener>,
     /// Where the menu reads this process's icon from (an `.app` bundle on macOS, the `.exe` on Windows).
     pub bundle: Option<String>,
+    /// The short Docker container ID when this row is a container rather than a process.
+    pub container: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -218,6 +220,7 @@ impl Scanner {
                 listeners: process.listeners.into_iter().collect(),
                 bundle: platform::icon_source(&id.executable),
                 executable: id.executable,
+                container: None,
             });
         }
         let live = processes
@@ -228,6 +231,8 @@ impl Scanner {
         self.cpu.retain(|token, _| live.contains(token.as_str()));
         self.activity
             .retain(|token, _| live.contains(token.as_str()));
+        // After the caches are pruned, so the Docker engine's own samples survive the split.
+        let mut processes = docker::split(processes);
         processes.sort_by_key(|process| {
             (
                 process.listeners.first().map(|l| l.port).unwrap_or(0),
@@ -244,6 +249,9 @@ impl Scanner {
     }
 
     pub fn details(&mut self, pid: i32, token: &str) -> Result<ProcessDetails, String> {
+        if docker::container_id(token).is_some() {
+            return docker::details(token);
+        }
         validate_identity(pid, token)?;
         let details = platform::read_details(&[pid])
             .remove(&pid)
@@ -261,7 +269,7 @@ fn validate_identity(pid: i32, token: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn matching_ports(expected: &[u16], actual: &BTreeSet<u16>) -> bool {
+pub(crate) fn matching_ports(expected: &[u16], actual: &BTreeSet<u16>) -> bool {
     !expected.is_empty() && expected.iter().copied().collect::<BTreeSet<_>>() == *actual
 }
 
@@ -276,6 +284,9 @@ pub fn stop(
     expected_ports: &[u16],
     force: bool,
 ) -> Result<StopOutcome, String> {
+    if docker::container_id(token).is_some() {
+        return docker::stop(token, expected_ports, force);
+    }
     validate_identity(pid, token)?;
     let actual_ports = platform::listeners()?
         .into_iter()

@@ -1,3 +1,24 @@
+# Verification — 23 November 2026 (command line, MCP server, Docker containers)
+
+## What changed
+
+- `portkiller list [--json]`, `portkiller free <port>... [--force]` and `portkiller mcp` run from the same binary as the menu bar app (`src-tauri/src/cli.rs`, `mcp.rs`). With no command, or any other argument, the app opens as before. Stops go through `scanner::stop`, so owner, start time, full port set and system/self protection are revalidated exactly as in the menu. `free` stops nothing when the app also listens on ports that were not named: a terminal is asked, a script gets exit code 2 and the full command.
+- Docker (`src-tauri/src/docker.rs`): when an engine row (Docker Desktop, OrbStack, Lima/Colima, WSL relay) holds ports, the engine socket or named pipe is asked for running containers, and each container that publishes a TCP port gets its own row (`project/service` for Compose, otherwise the container name). Stopping one sends `docker stop` (`docker kill` when forced) after checking the 64-character container ID and that its published port set still matches. Without a reachable engine the list is unchanged. Container rows have no memory and are never idle.
+
+## Checks run
+
+- macOS: `npm run build` (22.9 kB JS), `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`: 19 passed. New tests: container listing and Compose naming, engine ports moving to container rows, strict container IDs, plain and chunked engine answers, MCP handshake and tool listing, port parsing, and a real two-port Python listener for which naming one port stops nothing and naming both stops it.
+- By hand on macOS against real processes: `list` and `list --json` show the current listeners; `free <one of two ports>` from a script exits 2 and names the missing port; MCP `stop_port` with one port returns an error listing the other, with both ports it stops the listener; `free 7000` (ControlCenter) is refused as a protected process; an MCP `initialize` and `list_ports` session over stdio answers correctly.
+- `npm run tauri build -- --debug --bundles app`: the bundle's executable is `Contents/MacOS/portkiller`, and `--version` runs from it, so the paths in the README are right.
+- Live Docker Desktop (engine 29.8.0, socket `~/.docker/run/docker.sock`) with two `nginx:alpine` containers, one plain on `:18080` and one with Compose labels on `:18081` and `:18082`: `com.docker.backend` held all three ports, and `list` showed `pk-plain` and `pk-shop/web` as their own rows with container IDs and no engine row. `free 18081` from a script exited 2 and named `:18082`. MCP `stop_port` with both ports stopped `pk-shop/web` (exit 0, about 0.4 s) while `pk-plain` and Docker kept running. `free 18080 --force` killed `pk-plain` (exit 137). Afterwards both ports read as free. The containers and image were removed.
+- Windows: `cargo clippy --target x86_64-pc-windows-msvc --all-targets -- -D warnings` passed for the shared modules and `platform/windows.rs` in a scratch crate (Tauri's build script needs the Windows resource compiler).
+- Browser demo (`?demo`): containers show as `minio :9000` and `storefront/mongo :27017` with the Docker glyph; details show the port and folder and no memory; stopping `storefront/mongo` leaves `minio` running.
+
+## Not yet verified
+
+- Container rows in the native menu itself (the same scan was checked through the command line, and the rows in the browser demo); OrbStack, Colima and Rancher Desktop sockets.
+- Anything on a Windows PC: the console attach for `portkiller list` in a terminal, the Docker named pipe, and MCP over pipes.
+
 # Verification — 3 November 2026 (first CI run)
 
 - GitHub Actions CI passed on `macos-latest` (8 min) and `windows-latest` (11 min): frontend build, `cargo fmt --check`, Clippy with warnings as errors, `cargo test` and `tauri build`. On Windows this included the native test that starts a real Python listener, finds it, refuses a stale identity and a wrong port set, stops it and leaves its neighbour running.
