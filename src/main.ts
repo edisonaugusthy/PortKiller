@@ -53,6 +53,8 @@ let notice = '';
 let copiedPort: number | null = null;
 let available: string | null = null;
 let updating = false;
+/** The update could not be installed in place, so the button offers the installer instead. */
+let updateFailed = false;
 let loading = true;
 let scanning = false;
 let stopping = false;
@@ -224,7 +226,7 @@ function settingsView(): string {
     ? `<select data-appearance aria-label="Appearance" ${busy}>${(['auto', 'light', 'dark'] as const).map(value => `<option value="${value}" ${settings.appearance === value ? 'selected' : ''}>${value === 'auto' ? 'System' : `${value[0].toUpperCase()}${value.slice(1)}`}</option>`).join('')}</select>`
     : `<div class="segmented" role="group" aria-label="Appearance">${(['auto', 'light', 'dark'] as const).map(value => `<button data-action="appearance" data-value="${value}" aria-pressed="${settings.appearance === value}" ${busy}>${value[0].toUpperCase()}${value.slice(1)}</button>`).join('')}</div>`;
   const update = available
-    ? `<div class="update" role="status"><i aria-hidden="true"></i><span>Version ${esc(available)}</span><button class="accent" data-action="update" ${updating ? 'disabled' : ''}>${updating ? 'Updating…' : 'Update'}</button></div>` : '';
+    ? `<div class="update" role="status"><i aria-hidden="true"></i><span>Version ${esc(available)}</span>${updateFailed ? '<button class="accent" data-action="download">Download</button>' : `<button class="accent" data-action="update" ${updating ? 'disabled' : ''}>${updating ? 'Updating…' : 'Update'}</button>`}</div>` : '';
   return `<header class="header">${round(WINDOWS ? 'backWin' : 'back', 'Back', 'data-action="back"')}<h1>Settings</h1></header>
     ${update}
     <div class="settings">
@@ -363,6 +365,7 @@ app.addEventListener('click', event => {
     case 'open-port': openPort(port); render(); break;
     case 'copy': void copy(port); break;
     case 'update': void installUpdate(); break;
+    case 'download': void backend.openDownload().catch(reason => { error = String(reason); render(); }); break;
     case 'retry': scanError = ''; loading = true; render(); void refresh(); break;
     case 'clear': query = ''; render(); focusSearch(); break;
   }
@@ -409,7 +412,7 @@ async function installUpdate(): Promise<void> {
   if (updating) return;
   updating = true; error = ''; render();
   try { await backend.installUpdate(); }
-  catch (reason) { error = String(reason); }
+  catch (reason) { error = String(reason); updateFailed = true; }
   finally { updating = false; render(); }
 }
 

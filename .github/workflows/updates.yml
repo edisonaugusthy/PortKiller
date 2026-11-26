@@ -1,0 +1,23 @@
+name: Update check
+
+# Every day, and by hand: downloads what installed apps are offered right now and checks that it
+# installs, the way an installed app reads it (scripts/verify-updater.mjs). A failure means people
+# cannot update, and GitHub emails it.
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  feed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/verify-updater.mjs

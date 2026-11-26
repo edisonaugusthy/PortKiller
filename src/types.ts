@@ -47,6 +47,8 @@ export interface Backend {
   updateVersion(): Promise<string | null>;
   /** Downloads, verifies and installs the update, then restarts PortKiller. */
   installUpdate(): Promise<void>;
+  /** Opens the newest installer in the browser, for when the update could not be installed. */
+  openDownload(): Promise<void>;
   ready(): Promise<void>;
   resize(height: number): Promise<void>;
   close(): Promise<void>;

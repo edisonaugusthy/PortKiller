@@ -5,3 +5,6 @@ src-tauri/gen/
 .DS_Store
 .codebase-memory/
 *.log
+
+# Local release builds (scripts/release-mac.mjs)
+release/

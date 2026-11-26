@@ -1,12 +1,18 @@
 name: Release
 
 # Run by hand: Actions › Release › Run workflow, and enter the new version (for example 0.2.0).
-# It sets that version in the code, commits it to main, builds Windows and macOS into a draft, and
-# publishes "PortKiller <version>" as a GitHub Release once both succeed, with the installers, the signed
-# update packages and latest.json. Installed apps read latest.json and offer the update. Leave the
-# version empty to release the version already in the code. Untick "publish" to stop at the draft,
-# for example to notarize the Mac app before anyone can download or update to it; publish the draft
-# afterwards with: gh release edit v<version> --draft=false --latest
+# It sets that version in the code, commits it to main, and builds Windows and macOS into a draft
+# release "PortKiller <version>" with the installers, the signed update packages and latest.json.
+# Leave the version empty to release the version already in the code.
+#
+# The draft is not public, and installed apps do not see it. Its Mac build is ad-hoc signed; the
+# notarized one is built on the maintainer's Mac, and the draft is published only after every
+# download in it has been checked the way an installed app reads it:
+#   gh release download v<version> --pattern windows-source.txt --dir /tmp
+#   git switch --detach "$(cat /tmp/windows-source.txt)"
+#   node scripts/release-mac.mjs --upload   # Developer ID build, notarized, replaces the Mac files
+#   node scripts/publish-release.mjs        # checks the whole draft, publishes, checks the live feed
+# Never publish the draft by hand: 0.3.0 was, with a Mac update package no installed app could unpack.
 #
 # Website download links always point at the newest release:
 #   Windows: https://github.com/edisonaugusthy/PortKiller/releases/latest/download/PortKiller-Windows-Setup.exe
@@ -23,18 +29,19 @@ on:
         description: New version, for example 0.2.0 (empty keeps the current one)
         required: false
         type: string
-      publish:
-        description: Publish when both builds succeed (untick to stop at the draft)
-        required: false
-        type: boolean
-        default: true
 
 permissions:
   contents: write
 
+concurrency:
+  group: portkiller-release
+  cancel-in-progress: false
+
 jobs:
   windows:
     runs-on: windows-latest
+    outputs:
+      source: ${{ steps.source.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -53,6 +60,13 @@ jobs:
           git config user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
           git commit -am "Release v$VERSION"
           git push origin HEAD:main
+      - name: Record the Windows build commit
+        id: source
+        shell: bash
+        run: |
+          sha="$(git rev-parse HEAD)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "$sha" > "${RUNNER_TEMP}/windows-source.txt"
       - uses: dtolnay/rust-toolchain@stable
       - run: npm ci
       - id: build
@@ -66,7 +80,7 @@ jobs:
           releaseName: PortKiller __VERSION__
           releaseBody: Download PortKiller for your computer below. The app offers this update automatically.
           releaseDraft: true
-          releaseCommitish: main
+          releaseCommitish: ${{ steps.source.outputs.sha }}
           prerelease: false
           includeUpdaterJson: true
           args: --bundles nsis --config src-tauri/tauri.release.conf.json
@@ -77,19 +91,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cp src-tauri/target/release/bundle/nsis/*-setup.exe PortKiller-Windows-Setup.exe
-          gh release upload "v${{ steps.build.outputs.appVersion }}" PortKiller-Windows-Setup.exe --clobber
+          gh release upload "v${{ steps.build.outputs.appVersion }}" PortKiller-Windows-Setup.exe "${RUNNER_TEMP}/windows-source.txt" --clobber
 
-  # Ad-hoc signed (signingIdentity "-" in tauri.conf.json), because there is no Apple Developer ID: macOS
-  # asks people to confirm once on first open. Updates are verified by the update key.
+  # Ad-hoc signed (signingIdentity "-" in tauri.conf.json): the Developer ID certificate is not on GitHub.
+  # scripts/release-mac.mjs replaces this build in the draft with the notarized one before it is published.
   macos:
-    needs: windows # builds the version commit that the Windows job pushed
+    needs: windows
     runs-on: macos-latest
-    outputs:
-      version: ${{ steps.build.outputs.appVersion }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ needs.windows.outputs.source }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -108,7 +120,7 @@ jobs:
           tagName: v__VERSION__
           releaseName: PortKiller __VERSION__
           releaseDraft: true
-          releaseCommitish: main
+          releaseCommitish: ${{ needs.windows.outputs.source }}
           includeUpdaterJson: true
           # One app for Apple silicon and Intel Macs.
           args: --target universal-apple-darwin --bundles app,dmg --config src-tauri/tauri.release.conf.json
@@ -122,14 +134,3 @@ jobs:
           codesign -dvv "$bundle/macos/PortKiller.app" 2>&1 | grep -q "Signature=adhoc"
           cp "$bundle"/dmg/*.dmg PortKiller-macOS.dmg
           gh release upload "v${{ steps.build.outputs.appVersion }}" PortKiller-macOS.dmg --clobber
-
-  # Installed apps only see the release once every platform is in it.
-  publish:
-    needs: macos
-    if: inputs.publish
-    runs-on: ubuntu-latest
-    steps:
-      - env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ needs.macos.outputs.version }}
-        run: gh release edit "v$VERSION" --repo "$GITHUB_REPOSITORY" --draft=false --latest

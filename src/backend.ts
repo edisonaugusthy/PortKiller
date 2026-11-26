@@ -23,6 +23,7 @@ export async function createBackend(): Promise<Backend> {
     openPort: port => invoke('open_port', { port }),
     updateVersion: () => invoke<string | null>('update_version'),
     installUpdate: () => invoke('install_update'),
+    openDownload: () => invoke('open_download'),
     ready: async () => {
       const geometry = await invoke<{maxHeight: number}>('menu_ready');
       document.documentElement.style.setProperty('--max-menu-height', `${geometry.maxHeight}px`);

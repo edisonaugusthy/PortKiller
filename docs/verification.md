@@ -1,3 +1,34 @@
+# Verification — 26 November 2026 (updates that could not be installed)
+
+## What was wrong
+
+No installed PortKiller on a Mac could update to 0.3.0. The update was offered, and Update then failed with `Could not install the update: failed to unpack ._PortKiller.app into …`. The notarized Mac package in the v0.3.0 release had been packed by hand with macOS `tar`, which adds a `._` metadata entry for every file that has extended attributes, the first of them next to the app folder. The updater drops the first folder of every entry and unpacks the rest over the app, so it failed on that first entry. The signature was valid and `tar -x` unpacked the file without complaint, so nothing noticed. The notarized 0.2.0 package had the same fault. Windows was not affected.
+
+## What changed
+
+- The v0.3.0 release has a corrected package, `PortKiller_0.3.0_universal.app.tar.gz`: the same notarized app, byte for byte, packed without metadata entries and signed with the update key. `latest.json` points its four Mac entries at it; the Windows entries, version and DMG are unchanged. The faulty `PortKiller_universal.app.tar.gz` is still in the release and nothing refers to it.
+- `scripts/verify-updater.mjs` checks an update the way an installed app reads it: the signature and signed version against the key built into the app, the archive entry by entry with the updater's rules, the version and processors of the app inside, and its notarization ticket. Run on its own it checks the live feed and every download in it.
+- `scripts/release-mac.mjs` builds the Developer ID signed, notarized Mac app and puts it into the draft; Tauri packs the archive. `scripts/publish-release.mjs` checks the whole draft, publishes it and checks the live feed. The Release workflow now always stops at the draft.
+- The workflow records the commit it built Windows from in the draft (`windows-source.txt`). `release-mac.mjs --upload` only builds from a clean checkout of that commit and records it as `macos-source.txt`, and `publish-release.mjs` refuses a draft where the two differ (`scripts/release-source.mjs`). The feed check also refuses `latest.json` fields the updater would reject, such as a malformed `pub_date`.
+- `.github/workflows/updates.yml` runs the live feed check every day. CI runs the checker's tests.
+- When an update cannot be installed, the Update button in settings becomes Download and opens the newest installer.
+
+## Checks run
+
+- The updater's own unpacking code (`tauri-plugin-updater` 2.14.1, the version in every release so far) was run against the packages: the faulty 0.3.0 and 0.2.0 notarized packages fail on `._PortKiller.app`; the corrected one unpacks.
+- The same code installed the corrected package, downloaded from the live feed, over real copies of both 0.2.0 builds (notarized and the earlier ad-hoc one). Each became 0.3.0, identical to the app in the DMG, passing `codesign --verify --deep --strict`, `stapler validate` and Gatekeeper (`Notarized Developer ID`), and `portkiller --version` printed 0.3.0.
+- `node scripts/verify-updater.mjs` failed on the live feed before the repair and passes after it, for all six entries. `node scripts/publish-release.mjs --check` passes on v0.3.0, including the Mac app and DMG checks.
+- `node scripts/release-mac.mjs` without `--upload`: built 0.3.0 for both processors, Apple accepted the app and the DMG, and the resulting package passed every check and installed over 0.2.0 with the updater's code. Nothing was uploaded and the build was deleted.
+- `node --test scripts/verify-updater.test.mjs`: 9 passed, including an archive packed with plain macOS `tar`, which is refused.
+- `npm run build`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`: 19 passed.
+- Browser demo (`?demo&update=fail`): Update, then the error and Download in place of Update. No console errors.
+
+## Not yet verified
+
+- A real installed app updating itself through its own Update button: the checks above use the updater's code outside the app.
+- `release-mac.mjs --upload` and publishing a draft with `publish-release.mjs`, which need a new version. The dry run of `release-mac.mjs` was made before the build commit check was added; that check is covered by its test only. The workflows have not run on GitHub, so no draft has a `windows-source.txt` yet.
+- The Windows installer was checked for its signature only; nothing ran on a Windows PC.
+
 # Verification — 23 November 2026 (command line, MCP server, Docker containers)
 
 ## What changed

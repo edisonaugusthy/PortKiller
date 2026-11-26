@@ -389,6 +389,16 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
     app.restart()
 }
 
+/// Opens the newest installer in the default browser, for when the update cannot be installed in place.
+#[tauri::command]
+fn open_download() -> Result<(), String> {
+    platform::open_url(if cfg!(windows) {
+        "https://github.com/edisonaugusthy/PortKiller/releases/latest/download/PortKiller-Windows-Setup.exe"
+    } else {
+        "https://github.com/edisonaugusthy/PortKiller/releases/latest/download/PortKiller-macOS.dmg"
+    })
+}
+
 #[tauri::command]
 fn close_menu(window: WebviewWindow) -> Result<(), String> {
     window.destroy().map_err(|e| e.to_string())
@@ -525,6 +535,7 @@ pub fn run() {
             app_icon,
             update_version,
             install_update,
+            open_download,
             close_menu,
             quit_app
         ])

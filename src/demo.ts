@@ -73,7 +73,11 @@ export function demoBackend(): Backend {
     updateSettings: async next => { settings = next; },
     openPort: async port => { window.open(`http://localhost:${port}`, '_blank'); },
     updateVersion: async () => params.has('update') ? '0.2.0' : null,
-    installUpdate: async () => { await new Promise(resolve => setTimeout(resolve, 1500)); },
+    installUpdate: async () => {
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      if (params.get('update') === 'fail') throw 'Could not install the update: failed to unpack the app';
+    },
+    openDownload: async () => { window.open('https://github.com/edisonaugusthy/PortKiller/releases/latest', '_blank'); },
     ready: async () => {}, resize: async () => {}, close: async () => {}, quit: async () => {},
   };
 }

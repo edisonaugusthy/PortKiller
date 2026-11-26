@@ -26,6 +26,7 @@ jobs:
           python-version: '3.12'
       - run: npm ci
       - run: npm run build
+      - run: node --test scripts/verify-updater.test.mjs
       - run: cargo fmt --check
         working-directory: src-tauri
       - run: cargo clippy --all-targets -- -D warnings

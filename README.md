@@ -27,7 +27,7 @@ A small, open-source menu bar and tray app for macOS and Windows.
 | Windows 10 and 11 | [PortKiller-Windows-Setup.exe](https://github.com/edisonaugusthy/PortKiller/releases/latest/download/PortKiller-Windows-Setup.exe) |
 | macOS 14.5 and later | [PortKiller-macOS.dmg](https://github.com/edisonaugusthy/PortKiller/releases/latest/download/PortKiller-macOS.dmg) |
 
-The download always points at the newest release. PortKiller updates itself: when a new version is out, a dot appears on the settings gear and **Update** is at the top of settings.
+The download always points at the newest release. PortKiller updates itself: when a new version is out, a dot appears on the settings gear and **Update** is at the top of settings. If an update cannot be installed, the button becomes **Download** and opens the newest installer.
 
 PortKiller isn't signed by Apple or Microsoft, so the first launch takes one extra step. On macOS, open it once, then choose **Open Anyway** in **System Settings › Privacy & Security**. On Windows, choose **More info › Run anyway**.
 
@@ -96,7 +96,7 @@ npm run tauri dev      # run the app from source
 npm run tauri build    # build PortKiller.app or the Windows installer
 ```
 
-To work on the interface in a browser with sample processes, run `npm run dev` and open `http://127.0.0.1:1420/?demo`. Add `&windows` for the Windows look, `&theme=dark`, `&dense` for a long list, `&empty`, `&loading`, `&error` for a failed scan, or `&update` to show the update dot. The demo is removed from release builds.
+To work on the interface in a browser with sample processes, run `npm run dev` and open `http://127.0.0.1:1420/?demo`. Add `&windows` for the Windows look, `&theme=dark`, `&dense` for a long list, `&empty`, `&loading`, `&error` for a failed scan, `&update` to show the update dot, or `&update=fail` for an update that cannot be installed. The demo is removed from release builds.
 
 Checks (CI runs the same on macOS and Windows):
 
@@ -123,7 +123,11 @@ Everything that differs between macOS and Windows sits in `src-tauri/src/platfor
 
 ## Releasing
 
-Run **Actions › Release › Run workflow** and enter the new version, for example `0.2.0`. The workflow sets that version in the code and commits it, builds and signs the Windows and macOS installers and updates, and publishes the release with `latest.json`. Installed apps then show **Update** the next time the menu is opened (they check at most every six hours). Untick **publish** to stop at a draft release, for example to notarize the Mac app first; publish it later with `gh release edit v0.2.0 --draft=false --latest`. Locally, `node scripts/set-version.mjs 0.2.0` sets the version the same way.
+Run **Actions › Release › Run workflow** and enter the new version, for example `0.2.0`. The workflow sets that version in the code and commits it, then builds the Windows and macOS installers and update packages into a draft release with `latest.json`. A draft is not public, and installed apps do not see it. Locally, `node scripts/set-version.mjs 0.2.0` sets the version the same way.
+
+The draft's Mac build is ad-hoc signed. On the maintainer's Mac, check out the exact commit recorded in the draft's `windows-source.txt`. From that clean checkout, `node scripts/release-mac.mjs --upload` builds the Developer ID signed and notarized app for Apple silicon and Intel and puts it into the draft, and `node scripts/publish-release.mjs` publishes it. Installed apps then show **Update** the next time the menu is opened (they check at most every six hours).
+
+Publishing goes through that script and never through `gh release edit`. It first checks every download in the draft the way an installed app reads it (`scripts/verify-updater.mjs`): each platform is offered, each package is signed for this version by the key built into the app, and the Mac archive unpacks the way the updater unpacks it into a notarized app of this version for both processors. After publishing it checks the live feed the same way; `node scripts/verify-updater.mjs` repeats that check at any time. Release 0.3.0 was published by hand with a Mac package that had been packed with `tar`, whose extra metadata entries no installed app could unpack.
 
 The workflow needs the `TAURI_SIGNING_PRIVATE_KEY` secret (from `npm run tauri signer generate`).
 
